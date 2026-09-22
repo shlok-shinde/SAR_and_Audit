@@ -67,9 +67,26 @@ def test_unverified_status_takes_precedence(northgate_case):
 
 
 def test_legacy_audit_json_still_loads():
-    record = at.load_audit_record("006")
+    """Audit JSON written before Milestone 5 has none of the new keys — it must still load.
+
+    Built by stripping them from a current record, so the test does not depend on
+    audit_logs/ still holding a pre-Milestone-5 file (evaluate_narratives.py rewrites it).
+    """
+    NEW_RECORD_KEYS = ("red_flags", "detection", "case_facts", "generation_config", "case_source")
+    NEW_SENTENCE_KEYS = ("rule_attributions", "unverified_values")
+
+    current = at.load_audit_record("006").to_dict()
+    legacy = {k: v for k, v in current.items() if k not in NEW_RECORD_KEYS}
+    legacy["narrative_sentences"] = [
+        {k: v for k, v in s.items() if k not in NEW_SENTENCE_KEYS}
+        for s in legacy["narrative_sentences"]
+    ]
+
+    record = at.AuditRecord.from_dict(legacy)
     assert record.attempt_id == 249 and record.narrative_sentences
     assert record.red_flags == [] and record.case_source == "sample"
+    assert all(s.rule_attributions == [] and s.unverified_values == []
+               for s in record.narrative_sentences)
     assert at.generate_provenance_report(record)
 
 
