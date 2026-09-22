@@ -1,0 +1,30 @@
+# docker-compose.yml — SAR Narrative Generator infrastructure
+#
+# Services:
+#   - postgres: PostgreSQL 16 with JSONB audit trail storage
+#
+# Usage:
+#   docker compose up -d          # start services
+#   docker compose down           # stop services
+#   docker compose down -v        # stop and remove data volumes
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sar_postgres
+    environment:
+      POSTGRES_DB: sar_audit
+      POSTGRES_USER: sar_user
+      POSTGRES_PASSWORD: sar_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sar_user -d sar_audit"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

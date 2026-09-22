@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+.venv-linux/
+venv/
+env/
+
+# Environment variables / secrets
+.env
+.env.local
+
+# ChromaDB local storage
+chroma_db/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Data files (too large for git — document download steps instead)
+data/raw/*.csv
+data/raw/*.parquet
+data/*.parquet
+*.csv.gz
+HI-Small_Trans.csv
+HI-Small_accounts.csv
+HI-Small_Patterns.txt
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Docker
+docker-compose.override.yml
+postgres_data/
+
+# Audit trail (regenerable from generated narratives)
+audit_logs/
+
+# Logs
+*.log
+
+# Test / tooling caches
+.pytest_cache/
+.agents/
+.antigravitycli/
+
+# Scratch scripts (RULES.md: exploration only, not part of the build)
+scratch/
+
+# Regulatory source PDFs — third-party copyright; see sources/SOURCES.md for where to get them
+sources/*.pdf

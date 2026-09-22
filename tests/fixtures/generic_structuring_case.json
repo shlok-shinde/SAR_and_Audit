@@ -1,0 +1,33 @@
+{
+  "subject": {
+    "name": "Northgate Auto Parts LLC",
+    "subject_type": "Business",
+    "occupation": "Retail auto parts store",
+    "country": "US",
+    "address": "418 Mill Road, Dayton, OH",
+    "accounts": [
+      "NG-4471"
+    ],
+    "account_opened": "2021-02-15",
+    "expected_monthly_volume": 40000,
+    "expected_monthly_count": 30,
+    "risk_rating": "Medium"
+  },
+  "alert": {
+    "source": "Transaction monitoring alert",
+    "alert_id": "TM-2024-06-0193",
+    "detected_on": "2024-06-10",
+    "description": "Multiple cash deposits just below $10,000 from different depositors, followed by international wires."
+  },
+  "investigation": {
+    "steps": [
+      "Reviewed KYC / customer due diligence file",
+      "Reviewed account activity for the lookback period",
+      "Searched for prior SARs on the subject",
+      "Reviewed counterparties and beneficiaries",
+      "Contacted the customer for an explanation"
+    ],
+    "findings": "The owner stated the cash came from customers paying for bulk orders but provided no invoices. No prior SARs were found. Lumen Trade FZE and Kestrel Holdings Ltd have no known business relationship with an auto parts retailer.",
+    "ruled_out": "Seasonal sales: May 2024 card settlements averaged about $1,900 per deposit with no cash activity."
+  }
+}

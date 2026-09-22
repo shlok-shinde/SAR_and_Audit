@@ -1,0 +1,15 @@
+chromadb
+langchain-community
+langchain-core
+langchain-ollama
+langchain-text-splitters
+pandas
+psycopg2-binary
+pyarrow
+pymupdf
+sentence-transformers
+streamlit
+torchvision
+networkx
+openpyxl
+pytest

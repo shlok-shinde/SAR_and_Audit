@@ -1,0 +1,22 @@
+Value Date,Sender Acct,Sender,Sender Bank,Beneficiary Acct,Beneficiary,Beneficiary Bank,Amount,CCY,Channel,Origin Country,Destination Country,Alerted,Ref
+02/05/2024 17:05,SQ-000918,Square Settlements,Block Inc,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$1,840.25",USD,Card settlement,US,US,no,R001
+06/05/2024 17:02,SQ-000918,Square Settlements,Block Inc,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$2,210.60",USD,Card settlement,US,US,no,R002
+10/05/2024 17:04,SQ-000918,Square Settlements,Block Inc,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$1,395.10",USD,Card settlement,US,US,no,R003
+14/05/2024 17:03,SQ-000918,Square Settlements,Block Inc,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$2,388.75",USD,Card settlement,US,US,no,R004
+17/05/2024 17:01,SQ-000918,Square Settlements,Block Inc,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$1,612.40",USD,Card settlement,US,US,no,R005
+21/05/2024 17:06,SQ-000918,Square Settlements,Block Inc,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$1,975.00",USD,Card settlement,US,US,no,R006
+24/05/2024 17:02,SQ-000918,Square Settlements,Block Inc,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$2,104.35",USD,Card settlement,US,US,no,R007
+29/05/2024 17:04,SQ-000918,Square Settlements,Block Inc,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$1,760.90",USD,Card settlement,US,US,no,R008
+07/05/2024 10:20,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,DP-22019,Dayton Parts Supply,Ohio Valley Bank,"$3,500.00",USD,ACH,US,US,no,R009
+20/05/2024 10:25,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,DP-22019,Dayton Parts Supply,Ohio Valley Bank,"$3,625.50",USD,ACH,US,US,no,R010
+15/05/2024 08:00,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,GP-55001,Gusto Payroll,JPMorgan Chase,"$6,800.00",USD,ACH,US,US,no,R011
+31/05/2024 08:00,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,GP-55001,Gusto Payroll,JPMorgan Chase,"$6,800.00",USD,ACH,US,US,no,R012
+03/06/2024 09:12,DEP-RK01,Ravi Kumar,Walk-in (cash),NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$9,800.00",USD,Cash,US,US,yes,R013
+03/06/2024 14:40,DEP-ML02,Maria Lopez,Walk-in (cash),NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$9,650.00",USD,Cash,US,US,yes,R014
+04/06/2024 10:05,DEP-TW03,Tom Walsh,Walk-in (cash),NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$9,900.00",USD,Cash,US,US,yes,R015
+04/06/2024 15:22,DEP-RK01,Ravi Kumar,Walk-in (cash),NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$9,750.00",USD,Cash,US,US,yes,R016
+05/06/2024 11:30,DEP-SA04,Sara Ahmed,Walk-in (cash),NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$9,500.00",USD,Cash,US,US,yes,R017
+05/06/2024 16:02,DEP-ML02,Maria Lopez,Walk-in (cash),NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$9,850.00",USD,Cash,US,US,yes,R018
+06/06/2024 09:47,DEP-JB05,James Brown,Walk-in (cash),NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,"$9,700.00",USD,Cash,US,US,yes,R019
+06/06/2024 13:15,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,AE-77120,Lumen Trade FZE,Gulf Commercial Bank,"$38,000.00",USD,Wire,US,AE,yes,R020
+07/06/2024 10:30,NG-4471,Northgate Auto Parts LLC,Harbor Community Bank,CY-50831,Kestrel Holdings Ltd,Limassol Private Bank,"$29,500.00",USD,Wire,US,CY,yes,R021
