@@ -17,6 +17,7 @@ it's wrapped into a sample case.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import time
 from pathlib import Path
@@ -31,6 +32,9 @@ from typology import analyse_case, effective_pattern, warrants_no_sar
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 NARRATIVES_DIR = PROJECT_ROOT / "narratives"
 GENERATED_DIR = PROJECT_ROOT / "generated"
+# Ollama endpoint. Defaults to the local server; set OLLAMA_HOST when the app
+# runs in a container and Ollama stays on the host.
+OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 PRIMARY_MODEL = "gemma4:e2b"
 FALLBACK_MODEL = "qwen3.5:4b"
 TEMPERATURE = 0.3  # low for factual, structured output
@@ -711,6 +715,7 @@ def generate_with_audit(
 
                 llm = ChatOllama(
                     model=model_name,
+                    base_url=OLLAMA_URL,
                     temperature=TEMPERATURE,
                     num_ctx=NUM_CTX,
                     num_predict=NUM_PREDICT,

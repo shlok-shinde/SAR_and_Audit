@@ -106,6 +106,12 @@ Run the app:
 .venv/bin/streamlit run src/app.py
 ```
 
+Or run it in a container instead, alongside PostgreSQL (Ollama stays on the host and keeps the GPU):
+
+```bash
+docker compose --profile app up -d --build
+```
+
 Choose **New case** in the sidebar and upload a transaction file — `tests/fixtures/generic_structuring.csv` is a worked example, with its KYC profile and investigation notes in `generic_structuring_case.json`. Without PostgreSQL the app still drafts and audits; you just cannot save or reload cases.
 
 ### Optional: the IBM dataset samples

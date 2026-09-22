@@ -2,11 +2,19 @@
 #
 # Services:
 #   - postgres: PostgreSQL 16 with JSONB audit trail storage
+#   - app:      the Streamlit analyst UI (profile "app", see below)
+#
+# Ollama is deliberately NOT containerised: it keeps the host GPU, and the app
+# reaches it at host.docker.internal:11434.
 #
 # Usage:
-#   docker compose up -d          # start services
-#   docker compose down           # stop services
-#   docker compose down -v        # stop and remove data volumes
+#   docker compose up -d                    # PostgreSQL only (app on the host)
+#   docker compose --profile app up -d      # PostgreSQL + the app in a container
+#   docker compose down                     # stop services
+#   docker compose down -v                  # stop and remove data volumes
+#
+# The app image carries torch via sentence-transformers and is several GB. Run
+# it on the host with `streamlit run src/app.py` if you would rather not build.
 
 services:
   postgres:
@@ -25,6 +33,35 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  app:
+    profiles: ["app"]
+    build: .
+    container_name: sar_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: sar_audit
+      POSTGRES_USER: sar_user
+      POSTGRES_PASSWORD: sar_pass
+      OLLAMA_HOST: http://host.docker.internal:11434
+    extra_hosts:
+      # Linux has no host.docker.internal by default; this maps it to the host.
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8501:8501"
+    volumes:
+      # Built by the pipeline scripts, not baked into the image.
+      - ./chroma_db:/app/chroma_db
+      - ./data:/app/data
+      - ./generated:/app/generated
+      - ./audit_logs:/app/audit_logs
+      # For Samples mode, also mount the IBM account file if you downloaded it:
+      #   - ./HI-Small_accounts.csv:/app/HI-Small_accounts.csv:ro
+      # (left out by default — Docker would create a *directory* of that name
+      #  when the file is absent, which the loader would then choke on)
 
 volumes:
   postgres_data:
