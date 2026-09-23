@@ -134,7 +134,13 @@ That produces `data/laundering_transactions.parquet` — 3,209 laundering transa
 .venv/bin/python src/evaluate_narratives.py
 ```
 
-The second command regenerates all 13 drafts in `generated/` with the local model. `src/build_audit_trails.py --store-db` rebuilds their audit trails and loads them into PostgreSQL.
+The second command regenerates all 13 drafts in `generated/` with the local model.
+
+```bash
+.venv/bin/python src/build_audit_trails.py --store-db
+```
+
+Rebuilds the audit trails for the drafts already in `generated/` and loads them into PostgreSQL, without calling the model. It replays the same case, rules and retrieval the generator used and carries the original timings and model settings over from the record it replaces, so a rebuilt record reproduces the generated one rather than a thinner version of it.
 
 ### Tests
 

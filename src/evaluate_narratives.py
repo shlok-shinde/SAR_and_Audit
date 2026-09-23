@@ -111,7 +111,7 @@ def run_evaluation(skip_existing: bool = False, build_audit: bool = False):
     # Phase 1b: Build audit trails for skipped cases (if --audit)
     if build_audit and skipped_cases:
         print(f"\n--- Phase 1b: Building Audit Trails (skipped cases) ---")
-        from src.build_audit_trails import build_audit_for_case
+        from build_audit_trails import build_audit_for_case
         for case_id in skipped_cases:
             print(f"\n  Case {case_id}:")
             build_audit_for_case(case_id)
