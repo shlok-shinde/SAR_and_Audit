@@ -409,7 +409,9 @@ def detect_red_flags(df: pd.DataFrame, subject=None, context: pd.DataFrame | Non
     # Conversion can also happen inside an account: received in one currency,
     # sent on in another (e.g. USD in, Rupee out).
     converters = []
-    for account in set(df["To_Account"]) & set(df["From_Account"]):
+    # Sorted: set order varies per process (hash randomisation), and only the
+    # first three are named below — unsorted, the evidence text changed per run.
+    for account in sorted(set(df["To_Account"]) & set(df["From_Account"])):
         got = set(df.loc[df["To_Account"] == account, "Receiving Currency"])
         sent = set(df.loc[df["From_Account"] == account, "Payment Currency"])
         if got and sent and got != sent:
