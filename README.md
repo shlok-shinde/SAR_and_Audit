@@ -69,7 +69,7 @@ Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | Negative controls | 0 of 41 RANDOM attempts raise a high-severity red flag, so "no SAR" is reached without peeking at labels |
 | Retrieval | 14/16 label queries, 12/16 description queries — hybrid retrieval covers the gap |
 | Fact-check | Caught 3 invented figures in live runs; on the 13-case re-run it flagged 17 more, 15 of which are real amounts written with a `$` in front of a non-dollar currency |
-| Tests | 44 pytest tests |
+| Tests | 54 pytest tests, plus 25 known defects pinned as strict `xfail` tests — see [docs/EDGE_CASES.md](docs/EDGE_CASES.md) |
 | Generation | 29–37s per narrative on a local 5B model |
 
 Method and caveats: [docs/EVALUATION.md](docs/EVALUATION.md). The honest limitations are collected in [docs/INTERVIEW_PREP.md](docs/INTERVIEW_PREP.md) §6 — including the fact that the typology rules were designed against the same IBM data they are scored on.
@@ -154,7 +154,7 @@ Rebuilds the audit trails for the drafts already in `generated/` and loads them 
 
 ```
 src/          pipeline and app (see the module table above)
-tests/        44 pytest tests + fixtures for every upload format
+tests/        54 pytest tests + 25 strict-xfail edge cases, fixtures for every upload format
 narratives/   16 hand-written gold-standard SAR narratives (the benchmark)
 generated/    model drafts for the 13 evaluation cases
 sources/      regulatory PDFs: FinCEN, FATF, FFIEC, APG, GARG-AML
