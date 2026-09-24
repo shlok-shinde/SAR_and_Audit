@@ -27,7 +27,10 @@ def test_directives():
     assert "does not warrant" in gn.case_directive("RANDOM")          # backwards compatible
     assert gn.case_directive("FAN-OUT") == ""
     high = [ty.RedFlag("STRUCTURING", "t", "high", "e")]
-    assert gn.case_directive("NONE", high) == ""                      # a high flag blocks no-SAR
+    no_pattern_high = gn.case_directive("NONE", high)                 # a high flag blocks no-SAR…
+    assert "does not warrant a SAR filing." not in no_pattern_high
+    assert "high-severity red flags: t" in no_pattern_high            # …and says what to rely on
+    assert "classified this activity as CYCLE" in gn.case_directive("CYCLE", detected="FAN-IN")
     assert "continuing-activity" in gn.case_directive("FAN-OUT", [], continuing=True)
 
 

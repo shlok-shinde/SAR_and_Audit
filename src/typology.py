@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass, field
 import networkx as nx
 import pandas as pd
 
-from case_input import is_usd, parse_iso_date
+from case_input import currency_code, is_usd, parse_iso_date
 
 PATTERNS = ["FAN-OUT", "FAN-IN", "CYCLE", "GATHER-SCATTER", "SCATTER-GATHER",
             "STACK", "BIPARTITE", "NONE"]
@@ -276,6 +276,17 @@ def detect_typology(df: pd.DataFrame) -> Detection:
 
 CTR_THRESHOLD = 10_000.0
 STRUCTURING_FLOOR = 8_000.0
+# Cash reporting thresholds by currency: (threshold, symbol, what it is). Amounts from
+# 80% of the threshold up to just under it count as "just below". Only regimes with a
+# clear, single threshold are listed; other currencies are not tested for structuring.
+STRUCTURING_THRESHOLDS = {
+    "USD": (10_000.0, "$", "the $10,000 Currency Transaction Report threshold"),
+    "CAD": (10_000.0, "CA$", "the CA$10,000 Large Cash Transaction Report threshold (FINTRAC)"),
+    "AUD": (10_000.0, "A$", "the A$10,000 Threshold Transaction Report threshold (AUSTRAC)"),
+    "EUR": (10_000.0, "€", "the €10,000 EU cash threshold (cash declarations; AMLR cash-payment limit)"),
+    "INR": (1_000_000.0, "₹", "the ₹10 lakh Cash Transaction Report threshold (India)"),
+}
+STRUCTURING_FLOOR_SHARE = STRUCTURING_FLOOR / CTR_THRESHOLD
 PASS_THROUGH_DAYS = 7
 PASS_THROUGH_SHARE = 0.8
 
@@ -318,36 +329,40 @@ def _ids(rows: pd.DataFrame) -> list[str]:
 
 def _structuring(df: pd.DataFrame) -> list[RedFlag]:
     flags = []
-    usd = df[df["Payment Currency"].map(is_usd)]
-    band = usd[(usd["Amount Paid"] >= STRUCTURING_FLOOR) & (usd["Amount Paid"] < CTR_THRESHOLD)]
-    if len(band) < 2:
-        return flags
-    band = band.assign(_t=pd.to_datetime(band["Timestamp"], errors="coerce"))
-    for account, rows in band.groupby("To_Account"):
-        rows = rows.sort_values("_t")
-        # Largest set of just-under-threshold deposits inside any 7-day window.
-        best = rows.iloc[0:1]
-        for i in range(len(rows)):
-            window = rows[(rows["_t"] >= rows["_t"].iloc[i]) &
-                          (rows["_t"] < rows["_t"].iloc[i] + pd.Timedelta(days=7))]
-            if len(window) > len(best):
-                best = window
-        if len(best) < 2:
+    codes = df["Payment Currency"].map(currency_code)
+    for code, (threshold, sym, regime) in STRUCTURING_THRESHOLDS.items():
+        rows = df[codes == code]
+        band = rows[(rows["Amount Paid"] >= threshold * STRUCTURING_FLOOR_SHARE)
+                    & (rows["Amount Paid"] < threshold)]
+        if len(band) < 2:
             continue
-        cash = best["Payment Format"].str.lower().str.contains("cash").all()
-        senders = best["From_Account"].nunique()
-        what = "cash deposits" if cash else "transfers"
-        note = ("each just below the $10,000 Currency Transaction Report threshold"
-                if cash else "each just below $10,000 (the CTR threshold applies to cash, "
-                "but amounts clustered under it can indicate threshold avoidance)")
-        flags.append(RedFlag(
-            "STRUCTURING", "Amounts just below the $10,000 reporting threshold",
-            "high" if cash else "medium",
-            f"{len(best)} {what} of ${best['Amount Paid'].min():,.2f} to "
-            f"${best['Amount Paid'].max():,.2f} into {account} between "
-            f"{_day(best['Timestamp'].min())} and {_day(best['Timestamp'].max())}"
-            f"{f' from {senders} different senders' if senders > 1 else ''}, {note}.",
-            _ids(best)))
+        band = band.assign(_t=pd.to_datetime(band["Timestamp"], errors="coerce"))
+        for account, acct_rows in band.groupby("To_Account"):
+            acct_rows = acct_rows.sort_values("_t")
+            # Largest set of just-under-threshold deposits inside any 7-day window.
+            best = acct_rows.iloc[0:1]
+            for i in range(len(acct_rows)):
+                window = acct_rows[(acct_rows["_t"] >= acct_rows["_t"].iloc[i]) &
+                                   (acct_rows["_t"] < acct_rows["_t"].iloc[i] + pd.Timedelta(days=7))]
+                if len(window) > len(best):
+                    best = window
+            if len(best) < 2:
+                continue
+            cash = best["Payment Format"].str.lower().str.contains("cash").all()
+            senders = best["From_Account"].nunique()
+            what = "cash deposits" if cash else "transfers"
+            note = (f"each just below {regime}" if cash else
+                    f"each just below {regime} (the threshold applies to cash, but amounts "
+                    "clustered under it can indicate threshold avoidance)")
+            title = ("Amounts just below the $10,000 reporting threshold" if code == "USD"
+                     else f"Amounts just below the {sym}{threshold:,.0f} cash threshold")
+            flags.append(RedFlag(
+                "STRUCTURING", title, "high" if cash else "medium",
+                f"{len(best)} {what} of {sym}{best['Amount Paid'].min():,.2f} to "
+                f"{sym}{best['Amount Paid'].max():,.2f} into {account} between "
+                f"{_day(best['Timestamp'].min())} and {_day(best['Timestamp'].max())}"
+                f"{f' from {senders} different senders' if senders > 1 else ''}, {note}.",
+                _ids(best)))
     return flags
 
 

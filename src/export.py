@@ -54,9 +54,13 @@ def narrative_length(markdown: str) -> tuple[int, int]:
     return len(fincen_narrative(markdown)), FINCEN_NARRATIVE_LIMIT
 
 
+STATUS_LABELS = {"grounded": "sourced", "partial": "partly sourced", "ungrounded": "unsourced",
+                 "unverified": "unverified"}
+
+
 def _status_of(sent) -> str:
     from audit_trail import grounding_status
-    return grounding_status(sent)
+    return STATUS_LABELS[grounding_status(sent)]
 
 
 def case_file_markdown(case, audit, narrative: str, meta: dict) -> str:

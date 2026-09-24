@@ -206,8 +206,9 @@ def audit_payload(audit: AuditRecord | None, baseline: AuditRecord | None = None
                      for r in sent.field_references],
             "context": list(sent.chunk_attributions),
             "rules": [flag_titles.get(c, c) for c in getattr(sent, "rule_attributions", [])],
-            "unverified": [{"v": str(u.field_value), "n": u.note}
+            "unverified": [{"f": u.field_name, "v": str(u.field_value), "n": u.note}
                            for u in getattr(sent, "unverified_values", [])],
+            "review": getattr(sent, "needs_review", ""),
             "typology": sent.typology_match or "",
             "confidence": sent.confidence_note,
             "change": changes.get(sent.sentence_index, {}).get("kind", ""),
@@ -486,11 +487,11 @@ export default function (component) {
     wrap.innerHTML = `<div class="frame"><div class="bar">
       <div class="preview-bar">
         <span class="muted">Click a sentence to see its evidence</span>
-        <span class="legend" aria-hidden="true"><span><i style="background:var(--ok)"></i>Grounded</span>
-          <span><i style="background:var(--warn)"></i>Partial</span>
-          <span><i style="background:var(--bad)"></i>Ungrounded</span></span>
+        <span class="legend" aria-hidden="true" title="Sourced = cites values found in the case data and the analysis. It is not proof the claim is true."><span><i style="background:var(--ok)"></i>Sourced</span>
+          <span><i style="background:var(--warn)"></i>Partly sourced</span>
+          <span><i style="background:var(--bad)"></i>Unsourced</span></span>
         <button class="switch" role="switch" aria-checked="false" data-hl>
-          <span class="track"></span>Highlight grounding</button>
+          <span class="track"></span>Highlight sourcing</button>
       </div>
       <div class="toolbar" role="toolbar" aria-label="Formatting">
         <select data-block aria-label="Text style" title="Text style">
@@ -632,6 +633,7 @@ _AUDIT_CSS = _SHARED_CSS + """
 .sum { padding: 2px 2px 14px; }
 .sum-top { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
 .sum-title { font-size: 12px; color: var(--text-2); font-weight: 500; }
+.sum-note { margin: 8px 0 0; font-size: 11px; line-height: 1.45; color: var(--text-3, #767676); }
 .sum-n { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .meter { display: flex; gap: 2px; height: 6px; border-radius: 999px; overflow: hidden; background: var(--well); }
 .meter i { display: block; min-width: 3px; }
@@ -719,7 +721,12 @@ details.ctx summary .n { margin-left: auto; color: var(--text-3); font-size: 12p
 
 _AUDIT_JS = _SCROLL_JS + r"""
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-const LABEL = { grounded: "Grounded", partial: "Partial", ungrounded: "Ungrounded", unverified: "Unverified" };
+// "Sourced" = the sentence cites values that exist in the case data and the analysis.
+// It is not a verdict that the sentence is true (docs/EDGE_CASES.md, EC-03).
+const LABEL = { grounded: "Sourced", partial: "Partly sourced", ungrounded: "Unsourced", unverified: "Unverified" };
+const MISS = { Relationship: "doesn't match any transfer in the case data",
+               Duration: "doesn't match the activity dates", Claim: "contradicts the case data",
+               Count: "doesn't match the case data" };
 // Light inline Markdown for claim text (bold labels like "**Amount:**").
 const inl = (t) => esc(t).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
 // One-line plain version of a claim (table rows become "a · b · c").
@@ -731,19 +738,20 @@ function render(d) {
   if (d.empty) return `<div class="empty">No audit trail for this case.</div>`;
   const c = d.counts, t = Math.max(d.total, 1);
   let h = `<div class="sum">
-    <div class="sum-top"><span class="sum-title">Sentence grounding</span><span class="sum-n">${d.total} sentences</span></div>
-    <div class="meter" role="img" aria-label="${c.grounded} grounded, ${c.partial} partial, ${c.ungrounded} ungrounded, ${c.unverified} unverified">
+    <div class="sum-top"><span class="sum-title">Sentence sourcing</span><span class="sum-n">${d.total} sentences</span></div>
+    <div class="meter" role="img" aria-label="${c.grounded} sourced, ${c.partial} partly sourced, ${c.ungrounded} unsourced, ${c.unverified} unverified">
       ${c.grounded ? `<i class="ok" style="flex:${c.grounded / t}"></i>` : ""}
       ${c.partial ? `<i class="warn" style="flex:${c.partial / t}"></i>` : ""}
       ${c.ungrounded ? `<i class="bad" style="flex:${c.ungrounded / t}"></i>` : ""}
       ${c.unverified ? `<i class="alarm" style="flex:${c.unverified / t}"></i>` : ""}
     </div>
     <div class="key">
-      <span><i class="d" style="background:var(--ok)"></i><b>${c.grounded}</b>grounded</span>
-      <span><i class="d" style="background:var(--warn)"></i><b>${c.partial}</b>partial</span>
-      <span><i class="d" style="background:var(--bad)"></i><b>${c.ungrounded}</b>ungrounded</span>
-      ${c.unverified ? `<span class="miss"><b>${c.unverified}</b>unverified figures</span>` : ""}
-    </div>`;
+      <span><i class="d" style="background:var(--ok)"></i><b>${c.grounded}</b>sourced</span>
+      <span><i class="d" style="background:var(--warn)"></i><b>${c.partial}</b>partly sourced</span>
+      <span><i class="d" style="background:var(--bad)"></i><b>${c.ungrounded}</b>unsourced</span>
+      ${c.unverified ? `<span class="miss"><b>${c.unverified}</b>unverified</span>` : ""}
+    </div>
+    <p class="sum-note">Sourced means a sentence cites values found in the case data and the analysis — not that it is true. Unverified sentences state figures, dates, accounts or relationships the case data doesn't support.</p>`;
   const e = d.edits, parts = [];
   if (e.edited) parts.push(`${e.edited} edited`);
   if (e.added) parts.push(`${e.added} added`);
@@ -774,7 +782,8 @@ function render(d) {
       if (it.data.length) ev.push(`<dt>Data</dt><dd>${it.data.map((r) =>
         `<div class="kv"><code>${esc(r.f)}</code><span>${esc(r.v)}</span></div>`).join("")}</dd>`);
       if (it.unverified.length) ev.unshift(`<dt class="miss">Check</dt><dd>${it.unverified.map((u) =>
-        `<div class="miss">${esc(u.v)} is not in the case data${u.n ? `<small>${esc(u.n)}</small>` : ""}</div>`).join("")}</dd>`);
+        `<div class="miss">${esc(u.v)} ${u.n.startsWith("written with") ? "has the wrong currency sign" : (MISS[u.f] || "is not in the case data")}${u.n ? `<small>${esc(u.n)}</small>` : ""}</div>`).join("")}</dd>`);
+      if (it.review) ev.unshift(`<dt class="miss">Review</dt><dd><div class="miss">${esc(it.review)}</div></dd>`);
       if (it.context.length) ev.push(`<dt>Source</dt><dd>${it.context.map((x) => `<span class="chip">${esc(x)}</span>`).join(" ")}</dd>`);
       if (it.rules.length) ev.push(`<dt>Rules</dt><dd>${it.rules.map((x) => esc(x)).join(" · ")}</dd>`);
       if (it.typology) ev.push(`<dt>Typology</dt><dd>${esc(it.typology)}</dd>`);

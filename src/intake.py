@@ -104,6 +104,7 @@ def seed_intake(case: CaseInput | None = None) -> None:
     S["inv_findings"] = inv.findings or ""
     S["inv_ruled"] = inv.ruled_out or ""
     S["in_override"] = case.pattern_override if case and case.pattern_override else USE_DETECTION
+    S["in_override_reason"] = case.override_reason if case else ""
     S.pop("in_upload", None)
     S["screen"] = "intake"
 
@@ -218,6 +219,7 @@ def current_case() -> tuple[CaseInput, list[dict]]:
                                     ruled_out=S.get("inv_ruled", "").strip()),
         prior_sars=prior,
         pattern_override="" if override == USE_DETECTION else override,
+        override_reason="" if override == USE_DETECTION else S.get("in_override_reason", "").strip(),
     )
     return case, issues
 
@@ -493,13 +495,35 @@ def _tab_review(case: CaseInput, issues: list[dict], on_generate, busy: bool) ->
         st.selectbox("Pattern used for the narrative", [USE_DETECTION] + PATTERNS, key="in_override",
                      help="Override the rule-based detection if your investigation found otherwise.")
         pattern = effective_pattern(case, detection)
+        needs_reason = False
+        if case.pattern_override and case.pattern_override != detection.pattern:
+            # Live test: overriding GATHER-SCATTER (high confidence) with CYCLE produced
+            # "Pattern: CYCLE… grounding: GATHER-SCATTER" — the draft needs the reason.
+            needs_reason = detection.confidence in ("high", "medium")
+            if needs_reason:
+                st.warning(f"The rules found **{detection.pattern}** with {detection.confidence} "
+                           f"confidence. Say why the activity is {case.pattern_override} — the "
+                           "reason goes into the prompt and the audit record.",
+                           icon=":material/rule:")
+            st.text_input(f"Reason for classifying it as {case.pattern_override}",
+                          key="in_override_reason",
+                          placeholder="e.g. the funds return to the originator via an account "
+                                      "outside this export")
+            needs_reason = needs_reason and not case.override_reason
         if warrants_no_sar(pattern, flags):
             st.info("No known typology and no high-severity red flag: the draft will conclude that "
                     "the activity does not warrant a SAR. You still make the final decision.",
                     icon=":material/info:")
+        elif str(pattern).upper() in ("NONE", "RANDOM"):
+            st.info("No network typology, but high-severity red flags: the draft will be written "
+                    "as a SAR based on them.", icon=":material/info:")
         if case.is_continuing():
-            st.info("Continuing-activity SAR: prior filings will be cited by date and amount.",
-                    icon=":material/history:")
+            totals = case.continuing_totals()
+            cumulative = (f" Cumulative including prior SARs: **${totals['cumulative']:,.2f}**."
+                          if totals and totals["cumulative"] is not None else
+                          " Add the subject's accounts to compute the cumulative total.")
+            st.info("Continuing-activity SAR: the draft must cite each prior SAR by reference or "
+                    "filing date." + cumulative, icon=":material/history:")
     with right:
         st.markdown("**Red flags**")
         render_red_flags(flags)
@@ -516,7 +540,8 @@ def _tab_review(case: CaseInput, issues: list[dict], on_generate, busy: bool) ->
         st.error("The case is too large for the model's context window. Flag fewer transactions "
                  "or shorten the notes.", icon=":material/error:")
     st.button("Generate draft and audit trail", type="primary", icon=":material/auto_awesome:",
-              key="intake-generate-btn", disabled=over or busy, on_click=on_generate, args=(case,),
+              key="intake-generate-btn", disabled=over or busy or needs_reason,
+              on_click=on_generate, args=(case,),
               width="stretch")
 
 

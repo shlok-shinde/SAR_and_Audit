@@ -17,6 +17,7 @@ it's wrapped into a sample case.
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 import os
 import re
 import time
@@ -55,6 +56,9 @@ ATTEMPTS_PER_MODEL = 2    # re-sample once before falling back to the next model
 # model is summarised (per account pair + largest transfers); the audit trail
 # still checks the narrative against every row.
 MAX_LOG_ROWS = 60
+# Accounts listed one per line in ACCOUNTS & ENTITIES; the rest are summarised
+# (a 300-counterparty fan-out otherwise overflows num_ctx).
+MAX_ACCOUNT_LINES = 40
 TOP_ROWS_WHEN_SUMMARISED = 20
 
 # Few-shot example case IDs (attempt IDs from Patterns.txt)
@@ -137,11 +141,14 @@ def format_transaction_data(case_or_attempt, pattern: str | None = None,
     if case.dataset_label and pattern == case.dataset_label:
         pattern_line = f"Pattern: {pattern}" + (f" ({case.degree_info})" if case.degree_info else "")
     elif case.pattern_override:
-        pattern_line = f"Pattern: {pattern} (selected by the analyst)"
+        reason = f": {case.override_reason}" if case.override_reason else ""
+        pattern_line = f"Pattern: {pattern} (selected by the analyst{reason})"
     else:
         conf = f", {detection.confidence} confidence" if detection else ""
         pattern_line = f"Pattern: {pattern} (rule-based detection{conf})"
 
+    if df.empty:
+        return "\n".join([header, pattern_line, "Transaction Count: 0"])
     currencies = sorted(set(df["Receiving Currency"]) | set(df["Payment Currency"]))
     formats = sorted(set(df["Payment Format"]))
     unique_accounts = set(df["From_Account"]) | set(df["To_Account"])
@@ -150,8 +157,11 @@ def format_transaction_data(case_or_attempt, pattern: str | None = None,
         header,
         pattern_line,
         f"Transaction Count: {len(df)}",
-        f"Total Amount Paid: {_totals(df, 'Amount Paid', 'Payment Currency')}",
-        f"Total Amount Received: {_totals(df, 'Amount Received', 'Receiving Currency')}",
+        # Every leg of every transfer: money passing through an account is counted at
+        # each hop, so this is not the amount laundered (live drafts reported it as one).
+        f"Sum of all transfer legs, paid (each hop counted; not the amount laundered): "
+        f"{_totals(df, 'Amount Paid', 'Payment Currency')}",
+        f"Sum of all transfer legs, received: {_totals(df, 'Amount Received', 'Receiving Currency')}",
         f"Min Amount: {_money(df['Amount Paid'].min(), first_ccy)}"
         if len(currencies) == 1 else "Min Amount: see transaction log (several currencies)",
         f"Max Amount: {_money(df['Amount Paid'].max(), first_ccy)}"
@@ -171,6 +181,13 @@ def format_transaction_data(case_or_attempt, pattern: str | None = None,
         lines.append("By Payment Format: " + "; ".join(
             f"{fmt} {int(r['n'])} ({_totals(df[df['Payment Format'] == fmt], 'Amount Paid', 'Payment Currency')})"
             for fmt, r in by_format.iterrows()))
+    for acct in sorted(subject_accounts & unique_accounts):
+        inflow = df[(df["To_Account"] == acct) & (df["From_Account"] != acct)]
+        outflow = df[(df["From_Account"] == acct) & (df["To_Account"] != acct)]
+        lines.append(
+            f"Subject account {acct}: money in {_totals(inflow, 'Amount Received', 'Receiving Currency') if len(inflow) else '0.00'} "
+            f"({len(inflow)} transfers); money out {_totals(outflow, 'Amount Paid', 'Payment Currency') if len(outflow) else '0.00'} "
+            f"({len(outflow)} transfers)")
     hubs = []
     for acct in sorted(unique_accounts):
         inflow = df[(df["To_Account"] == acct) & (df["From_Account"] != acct)]
@@ -201,11 +218,31 @@ def format_transaction_data(case_or_attempt, pattern: str | None = None,
                 "roles": set(),
             })
             info["roles"].add(role)
-    for acct, info in account_info.items():
+    shown = list(account_info)
+    if len(shown) > MAX_ACCOUNT_LINES:
+        volume = (df.groupby("From_Account")["Amount Paid"].sum()
+                  .add(df.groupby("To_Account")["Amount Received"].sum(), fill_value=0))
+        hub_ids = {acct for _, acct, _, _ in hubs}
+        shown = sorted(account_info, key=lambda a: (a not in subject_accounts, a not in hub_ids,
+                                                    -volume.get(a, 0), a))[:MAX_ACCOUNT_LINES]
+    for acct in shown:
+        info = account_info[acct]
         roles = "/".join(sorted(info["roles"]))
         extra = f" | {info['country']}" if info["country"] else ""
         mark = " | SUBJECT" if acct in subject_accounts else ""
         lines.append(f"  {acct} | {info['bank']} | {info['entity']} | {roles}{extra}{mark}")
+    rest = [a for a in account_info if a not in set(shown)]
+    if rest:
+        roles = Counter("/".join(sorted(account_info[a]["roles"])) for a in rest)
+        banks = {account_info[a]["bank"] for a in rest}
+        legs = df[df["From_Account"].isin(rest) | df["To_Account"].isin(rest)]
+        lines.append(
+            f"  …and {len(rest)} further accounts ("
+            + ", ".join(f"{n} {r.lower()}" for r, n in roles.most_common())
+            + f") at {len(banks)} banks, in {len(legs)} transfers of "
+            f"{legs['Amount Paid'].min():,.2f}–{legs['Amount Paid'].max():,.2f}"
+            f" {legs['Payment Currency'].iloc[0]}"
+            + (" (several currencies)" if legs["Payment Currency"].nunique() > 1 else ""))
 
     lines.append("")
     if len(df) <= MAX_LOG_ROWS:
@@ -292,8 +329,22 @@ def format_case_file(case: CaseInput, detection=None, flags=(),
                     f"covering {p.period_start} to {p.period_end}"
                     if p.period_start and p.period_end else ""]
             out.append("  - " + ", ".join(b for b in bits if b))
+        totals = case.continuing_totals()
+        if totals and totals["prior_total"]:
+            out.append(f"  Previously reported in total: ${totals['prior_total']:,.2f}")
+        if totals and totals["cumulative"] is not None:
+            out.append(f"  This period: ${totals['current']:,.2f} ({totals['basis']})")
+            out.append(f"  Cumulative including prior SARs: ${totals['cumulative']:,.2f}")
 
-    if include_detection and detection is not None:
+    overridden = (include_detection and detection is not None and case.pattern_override
+                  and case.pattern_override != detection.pattern)
+    if overridden:
+        # The detection's evidence would argue for a different typology than the one
+        # the draft must use (live test: "Pattern: CYCLE… grounding: GATHER-SCATTER").
+        reason = f" Reason: {case.override_reason}" if case.override_reason else ""
+        out.append(f"TYPOLOGY: {case.pattern_override}, selected by the analyst (the rules "
+                   f"detected {detection.pattern}; the analyst's choice governs).{reason}")
+    elif include_detection and detection is not None:
         out.append(f"RULE-BASED TYPOLOGY DETECTION: {detection.pattern} "
                    f"({detection.confidence} confidence)")
         out += [f"  - {e}" for e in detection.evidence]
@@ -499,11 +550,13 @@ RULES:
 3. Include one sentence acknowledging alternative explanations in the Why Suspicious section.
 4. Keep the How section focused on the mechanical description of how funds moved — no interpretive judgment.
 5. Reference specific regulatory sources (FFIEC, FinCEN, FATF) when matching typologies, only if they appear in the retrieved context.
-6. Only when the case's pattern is RANDOM or NONE (no typology match), state in Why Suspicious and Supporting Pattern that the activity does not match any known laundering typology and does not warrant a SAR filing. For every other pattern, never write that the activity does not warrant a SAR.
+6. Conclude that the activity does not warrant a SAR filing only when the final IMPORTANT instruction for the case tells you to. Otherwise never write that the activity does not warrant a SAR: when no network typology was detected, high-severity red flags such as structuring are themselves the grounds for suspicion.
 7. Be concise but thorough. Each section should be 1-3 sentences for simple cases, up to a paragraph for complex cases.
 8. If a CASE FILE is provided, it holds facts from the investigating analyst (KYC profile, alert, investigation steps and findings, prior SARs). Use them: describe the subject's occupation or business and expected activity in Who, and explain in Why Suspicious how the activity departs from that baseline. Never invent KYC facts (occupation, address, account opening date, expected activity); if one is not in the case file, leave it out.
 9. Describe only the investigation steps listed in the case file, and include the findings and any explanations the analyst ruled out.
 10. The typology detection and red flags in the case file were computed by rules from the transaction data. Use their evidence, citing the specific amounts, dates and accounts behind them.
+11. Write US-dollar amounts with a $ sign ($9,800.00). Write every other currency with its name after the number (58,696.90 Euro), and never put a $ sign on an amount that is not in US dollars.
+12. When funds pass through an account, report the amount it received and the amount it sent on separately. Never add money in and money out together into one total.
 
 OUTPUT FORMAT:
 - Output only the narrative in Markdown. Start directly with "### Who (Subject Identification)".
@@ -554,22 +607,93 @@ NEGATIVE_CONTROL_DIRECTIVE = (
 )
 CONTINUING_DIRECTIVE = (
     "\n\nIMPORTANT: This is a continuing-activity SAR. Reference each prior SAR listed in "
-    "the case file by its filing date and reference, state the amount previously reported "
-    "and the cumulative total including this period, and describe only the new activity "
-    "in detail. Do not restate the prior narratives."
+    "the case file by its filing date and reference and the amount it reported. If the case "
+    "file gives a cumulative total, state it exactly as given; never compute one yourself. "
+    "Describe only the new activity in detail, and do not restate the prior narratives."
+)
+# Live runs: gemma4:e2b ignored the instruction above twice in a row, but small models
+# copy a given sentence reliably. So the sentence is built from the case file here.
+CONTINUING_SENTENCE_DIRECTIVE = (
+    "\n\nIMPORTANT: This is a continuing-activity SAR. In Why Suspicious, include this "
+    "sentence exactly as written:\n\"{sentence}\"\nDescribe only the new activity in detail, "
+    "and do not restate the prior narratives."
 )
 
 
-def case_directive(pattern: str, flags=(), continuing: bool = False) -> str:
-    directive = NEGATIVE_CONTROL_DIRECTIVE if warrants_no_sar(str(pattern), list(flags)) else ""
+def continuing_sentence(case: CaseInput) -> str:
+    """The prior-SAR citation the draft must contain, built from the case file."""
+    from case_input import parse_iso_date
+    parts = []
+    for p in case.prior_sars:
+        if not (p.filed_on or p.reference):
+            continue
+        filed = parse_iso_date(p.filed_on)
+        when = f", filed on {filed:%B} {filed.day}, {filed.year}," if filed else ""
+        amount = f" reported ${p.amount:,.2f}" if p.amount else " was filed"
+        parts.append(f"SAR {p.reference}{when}{amount}" if p.reference
+                     else f"a SAR{when}{amount}".replace(", filed on", " filed on", 1))
+    if not parts:
+        return ""
+    text = "This is a continuing-activity SAR: " + "; ".join(parts)
+    totals = case.continuing_totals()
+    if totals and totals["cumulative"] is not None:
+        text += (f"; including this period's ${totals['current']:,.2f}, the cumulative total "
+                 f"is ${totals['cumulative']:,.2f}")
+    return text + "."
+# No network pattern, but the rules found something serious (e.g. one customer
+# structuring cash into their own account: a single graph edge, so NONE).
+HIGH_FLAG_DIRECTIVE = (
+    "\n\nIMPORTANT: No network laundering typology was detected in the flow of funds, but "
+    "the rule-based review raised high-severity red flags: {titles}. Base Why Suspicious and "
+    "Supporting Pattern on these red flags and their evidence. Do not state that the activity "
+    "does not warrant a SAR."
+)
+OVERRIDE_DIRECTIVE = (
+    "\n\nIMPORTANT: The analyst classified this activity as {pattern}{reason}. Describe it "
+    "as {pattern} in Supporting Pattern, and do not name {detected} or any other typology as "
+    "the pattern."
+)
+
+
+def _severity(flag) -> str:
+    return flag.severity if hasattr(flag, "severity") else flag.get("severity", "")
+
+
+def _title(flag) -> str:
+    return flag.title if hasattr(flag, "title") else flag.get("title", "")
+
+
+def case_directive(pattern: str, flags=(), continuing: bool = False, *,
+                   detected: str | None = None, override_reason: str = "",
+                   continuing_text: str = "") -> str:
+    """Case-specific instructions appended at the end of the prompt.
+
+    `detected` is the rule-based pattern; when the analyst chose a different one,
+    the model is told to follow the analyst.
+    """
+    flags = list(flags)
+    if warrants_no_sar(str(pattern), flags):
+        directive = NEGATIVE_CONTROL_DIRECTIVE
+    elif str(pattern).upper() in ("NONE", "RANDOM"):
+        titles = [_title(f) for f in flags if _severity(f) == "high"]
+        directive = HIGH_FLAG_DIRECTIVE.format(titles="; ".join(titles))
+    else:
+        directive = ""
+    if detected and str(detected).upper() != str(pattern).upper():
+        directive += OVERRIDE_DIRECTIVE.format(
+            pattern=pattern, detected=detected,
+            reason=f" (analyst's reason: {override_reason})" if override_reason else "")
     if continuing:
-        directive += CONTINUING_DIRECTIVE
+        directive += (CONTINUING_SENTENCE_DIRECTIVE.format(sentence=continuing_text)
+                      if continuing_text else CONTINUING_DIRECTIVE)
     return directive
 
 
 # ── Output validation ────────────────────────────────────────────────────────
 
 REQUIRED_HEADINGS = ["Who", "What", "When", "Where", "Why Suspicious"]
+# Scored by the evaluation; a draft missing one is retried, then kept with a warning.
+EXPECTED_HEADINGS = ["How", "Supporting Pattern", "Quantitative Summary"]
 REFUSAL_PATTERN = re.compile(
     r"\b(I cannot|I can't|I can not|I am unable|I'm unable|I won't|I will not|"
     r"I am an AI|as an AI|cannot fulfill|can't fulfill|not able to (?:help|assist|generate|provide))\b",
@@ -581,41 +705,99 @@ class NarrativeGenerationError(RuntimeError):
     """Every model/attempt produced unusable output (refusal, wrong format, cut off)."""
 
 
-NO_SAR_PATTERN = re.compile(r"\b(?:does|do|would) not warrant\b|\bno SAR\b|\bnot warrant(?:ed)?\b",
-                            re.IGNORECASE)
+# The draft's *conclusion* that no SAR is warranted. Narrow on purpose: "No SAR has
+# previously been filed" or "further review is not warranted" are not conclusions.
+NO_SAR_PATTERN = re.compile(
+    r"\b(?:does|do|did|would|will) not warrant (?:the )?(?:filing (?:of )?)?(?:a |an )?"
+    r"(?:SAR|Suspicious Activity Report)"
+    r"|\b(?:SAR|Suspicious Activity Report)(?: filing)? (?:is|was|would be) not (?:warranted|required)"
+    r"|\bno SAR (?:filing )?(?:is|should be|will be|needs to be|would be) (?:filed|warranted|required)"
+    r"|\bnot warrant(?:ing)? (?:a |an )?(?:SAR|Suspicious Activity Report)",
+    re.IGNORECASE)
+ALTERNATIVE_PATTERN = re.compile(
+    r"alternative|legitimate|ruled out|explanation|innocent|benign|lawful|business purpose|"
+    r"could (?:also )?(?:be|reflect|indicate|represent)|may (?:also )?(?:be|reflect|indicate)",
+    re.IGNORECASE)
+
+
+def _has_heading(text: str, heading: str) -> bool:
+    return bool(re.search(rf"^###?\s*{re.escape(heading)}\b", text, re.IGNORECASE | re.MULTILINE))
+
+
+def _section(text: str, heading: str) -> str:
+    m = re.search(rf"^###?\s*{re.escape(heading)}\b.*?$(.*?)(?=^###?\s|\Z)", text,
+                  re.IGNORECASE | re.MULTILINE | re.DOTALL)
+    return m.group(1) if m else ""
 
 
 def validate_narrative(text: str, done_reason: str | None = None,
                        pattern: str | None = None, no_sar: bool | None = None) -> list[str]:
-    """Return the problems that make `text` unusable as a SAR draft ([] = valid)."""
+    """Return the problems that make `text` unusable as a SAR draft ([] = valid).
+
+    `no_sar` comes from `typology.warrants_no_sar` (pattern AND red flags); when it
+    isn't given it falls back to the pattern alone.
+    """
     problems = []
     if not text.strip():
         return ["empty output"]
     if REFUSAL_PATTERN.search(text[:600]):
         problems.append("model refused the task")
-    missing = [h for h in REQUIRED_HEADINGS
-               if not re.search(rf"^###?\s*{re.escape(h)}", text, re.IGNORECASE | re.MULTILINE)]
+    missing = [h for h in REQUIRED_HEADINGS if not _has_heading(text, h)]
     if missing:
         problems.append(f"missing required FFIEC sections: {', '.join(missing)}")
     if done_reason == "length":
         problems.append(f"output cut off at {NUM_PREDICT} tokens")
     if no_sar is None:
-        no_sar = str(pattern).upper() == "RANDOM"
-    if no_sar and not NO_SAR_PATTERN.search(text):
+        no_sar = str(pattern).upper() in ("RANDOM", "NONE")
+    concludes_no_sar = bool(NO_SAR_PATTERN.search(text))
+    if no_sar and not concludes_no_sar:
         problems.append("no typology / high red flag, but the draft doesn't conclude "
                         "'does not warrant a SAR'")
-    if (not no_sar and pattern and str(pattern).upper() not in ("RANDOM", "NONE")
-            and NO_SAR_PATTERN.search(text)):
-        # Small models copy rule 6's wording into positive cases, producing a
-        # self-contradicting draft ("…consistent with layering… does not warrant a SAR").
-        problems.append(f"draft says the activity does not warrant a SAR although the "
-                        f"pattern is {pattern}")
+    if not no_sar and concludes_no_sar:
+        # Small models copy the no-SAR wording into positive cases, producing a
+        # self-contradicting draft ("…consistent with structuring… does not warrant a SAR").
+        why = (f"the pattern is {pattern}" if pattern and str(pattern).upper() not in
+               ("RANDOM", "NONE") else "high-severity red flags exist")
+        problems.append(f"draft says the activity does not warrant a SAR although {why}")
     return problems
+
+
+def draft_warnings(text: str, prior_sars=()) -> list[str]:
+    """Shortcomings worth one retry, but not worth discarding an otherwise valid draft."""
+    warnings = []
+    missing = [h for h in EXPECTED_HEADINGS if not _has_heading(text, h)]
+    if missing:
+        warnings.append(f"missing FFIEC sections: {', '.join(missing)}")
+    why = _section(text, "Why Suspicious")
+    if why.strip() and not ALTERNATIVE_PATTERN.search(why):
+        warnings.append("Why Suspicious does not address alternative explanations (rule 3)")
+    from audit_trail import dates_in_text
+    from case_input import parse_iso_date
+    lower = text.lower()
+    for p in prior_sars:
+        if not (p.filed_on or p.reference):
+            continue
+        filed = parse_iso_date(p.filed_on)
+        cited = (p.reference and p.reference.lower() in lower) or (
+            filed and filed in dates_in_text(text, {filed.year}))
+        if not cited:
+            warnings.append(f"continuing-activity SAR: prior SAR {p.reference or p.filed_on} "
+                            "is not cited by reference or filing date")
+    return warnings
 
 
 def estimate_tokens(messages) -> int:
     """Conservative token estimate (≈3.2 chars/token for English + numbers)."""
     return int(sum(len(m.content) for m in messages) / 3.2)
+
+
+def _directive_for(case: CaseInput, pattern: str, detection, flags,
+                   use_dataset_label: bool = False) -> str:
+    overridden = bool(case.pattern_override) and not use_dataset_label and detection is not None
+    return case_directive(pattern, flags, case.is_continuing(),
+                          detected=detection.pattern if overridden else None,
+                          override_reason=case.override_reason,
+                          continuing_text=continuing_sentence(case))
 
 
 def prepare_generation(case_or_attempt, case_id: str = "", use_dataset_label: bool = False
@@ -624,6 +806,8 @@ def prepare_generation(case_or_attempt, case_id: str = "", use_dataset_label: bo
     prompt-budget check). Returns a dict of case, detection, flags, pattern,
     messages, retrieval results and token estimate."""
     case = as_case(case_or_attempt, case_id)
+    if case.flagged().empty:
+        raise NarrativeGenerationError("The case has no transactions to describe.")
     if use_dataset_label and case.dataset_label and not case.pattern_override:
         case.pattern_override = case.dataset_label
     detection, flags = analyse_case(case)
@@ -640,7 +824,7 @@ def prepare_generation(case_or_attempt, case_id: str = "", use_dataset_label: bo
         retrieved_context=context,
         case_file=f"{case_file}\n\n" if case_file else "",
         transaction_data=txn_data,
-        case_directive=case_directive(pattern, flags, case.is_continuing()),
+        case_directive=_directive_for(case, pattern, detection, flags, use_dataset_label),
     )
     return {
         "case": case, "detection": detection, "flags": flags, "pattern": pattern,
@@ -663,8 +847,43 @@ def estimate_prompt_tokens(case: CaseInput, detection, flags) -> int:
              + RETRIEVAL_ALLOWANCE_CHARS
              + len(format_transaction_data(case, pattern, detection))
              + len(format_case_file(case, detection, flags))
-             + len(case_directive(pattern, flags, case.is_continuing())))
+             + len(_directive_for(case, pattern, detection, flags)))
     return int(chars / 3.2)
+
+
+def check_models(models: list[str] | None = None) -> list[str]:
+    """Local-first guard and reachability check, run before any expensive work.
+
+    Refuses Ollama cloud models (they would send case data off this machine), fails
+    fast when the server is down, and returns the configured models that are installed.
+    """
+    import json
+    import urllib.request
+
+    models = models or [PRIMARY_MODEL, FALLBACK_MODEL]
+    remote = [m for m in models if "cloud" in m.lower()]
+    if remote:
+        raise NarrativeGenerationError(
+            f"{', '.join(remote)} runs on Ollama's cloud, which would send case data off this "
+            "machine (RULES.md: local-first). Configure a local model.")
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=3) as reply:
+            installed = {m["name"] for m in json.load(reply).get("models", [])}
+    except OSError as e:
+        raise NarrativeGenerationError(
+            f"Ollama is not reachable at {OLLAMA_URL} ({e}). Start it with `ollama serve`.") from e
+    available = [m for m in models if m in installed or f"{m}:latest" in installed]
+    if not available:
+        raise NarrativeGenerationError(
+            f"None of the configured models is installed ({', '.join(models)}). "
+            f"Run `ollama pull {models[0]}`.")
+    return available
+
+
+def _is_connection_error(e: Exception) -> bool:
+    text = f"{type(e).__name__} {e}".lower()
+    return isinstance(e, ConnectionError) or any(
+        k in text for k in ("connecterror", "connection refused", "failed to connect"))
 
 
 def generate_with_audit(
@@ -684,6 +903,7 @@ def generate_with_audit(
     from audit_trail import build_audit_record
 
     start_time = time.time()
+    models = check_models()
     if verbose:
         print("Analysing case, retrieving typology context, building prompt...", flush=True)
     prep = prepare_generation(case_or_attempt, case_id, use_dataset_label)
@@ -698,10 +918,15 @@ def generate_with_audit(
 
     from langchain_ollama import ChatOllama
 
-    result, model_used, seed_used = "", "", None
     failures: list[str] = []
-    # Try each model; re-sample once with a new seed before falling back.
-    for model_name in [PRIMARY_MODEL, FALLBACK_MODEL]:
+    best = None           # (text, model, seed, label, warnings) of the best usable draft
+    extra_tries = 0       # a usable draft with warnings earns exactly one more attempt
+
+    def settled() -> bool:
+        return best is not None and (not best[4] or extra_tries >= 1)
+
+    # Try each model; re-sample with a new seed before falling back.
+    for model_name in models:
         for attempt in range(ATTEMPTS_PER_MODEL):
             label = f"{model_name} (attempt {attempt + 1})"
             try:
@@ -729,24 +954,38 @@ def generate_with_audit(
                 problems = validate_narrative(
                     text, reply.response_metadata.get("done_reason"), prep["pattern"],
                     no_sar=prep["no_sar"])
-            except Exception as e:  # noqa: BLE001 — model missing, Ollama down, etc.
+            except Exception as e:  # noqa: BLE001 — model missing, bad output, etc.
+                if _is_connection_error(e):   # retrying or falling back can't help
+                    raise NarrativeGenerationError(
+                        f"Lost the connection to Ollama at {OLLAMA_URL}: {e}") from e
                 problems = [f"error: {e}"]
 
-            if not problems:
-                result, model_used, seed_used = text, model_name, SEED + attempt
-                if verbose:
-                    print(f"  ✓ Generated with {label}", flush=True)
+            if problems:
+                failures.append(f"{label}: {'; '.join(problems)}")
+            else:
+                warnings = draft_warnings(text, case.prior_sars)
+                if best is None or len(warnings) < len(best[4]):
+                    best = (text, model_name, SEED + attempt, label, warnings)
+                if warnings:
+                    failures.append(f"{label}: usable, but {'; '.join(warnings)}")
+            if settled():
                 break
-            failures.append(f"{label}: {'; '.join(problems)}")
-            if verbose:
+            if best is not None:
+                extra_tries += 1
+            if verbose and failures:
                 print(f"  ✗ {failures[-1]}", flush=True)
-        if model_used:
+        if settled():
             break
 
-    if not model_used:
+    if best is None:
         raise NarrativeGenerationError(
             "No usable narrative was produced:\n- " + "\n- ".join(failures)
         )
+    result, model_used, seed_used, chosen, draft_warns = best
+    failures = [f for f in failures if not f.startswith(chosen + ":")]
+    if verbose:
+        print(f"  ✓ Generated with {chosen}" + (f" (warnings: {'; '.join(draft_warns)})"
+                                                 if draft_warns else ""), flush=True)
 
     generation_time = time.time() - start_time
     generation_config = {
@@ -761,6 +1000,8 @@ def generate_with_audit(
         "prompt_tokens_estimate": prep["prompt_tokens"],
         "few_shot_examples": FEW_SHOT_FILES,
         "rejected_attempts": failures,
+        "warnings": draft_warns,
+        "override_reason": case.override_reason,
         "pattern_source": ("analyst" if case.pattern_override and not use_dataset_label
                            else "dataset label" if use_dataset_label else "rule-based detection"),
     }

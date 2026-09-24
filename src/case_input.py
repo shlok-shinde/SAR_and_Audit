@@ -17,6 +17,7 @@ Sources:
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import io
 import json
@@ -126,6 +127,7 @@ class CaseInput:
     investigation: Investigation = field(default_factory=Investigation)
     prior_sars: list[PriorSAR] = field(default_factory=list)
     pattern_override: str = ""        # analyst's typology choice (overrides detection)
+    override_reason: str = ""         # why the analyst overrode the rule-based detection
 
     # ── Views ──
     def flagged(self) -> pd.DataFrame:
@@ -144,6 +146,27 @@ class CaseInput:
 
     def is_continuing(self) -> bool:
         return any(p.filed_on or p.reference for p in self.prior_sars)
+
+    def continuing_totals(self) -> dict | None:
+        """Prior-SAR total, this period's amount and the cumulative total, computed here so
+        the model copies the figure instead of doing the arithmetic.
+
+        This period = money received by the subject's own accounts from others (USD only);
+        without subject accounts, or in other currencies, only the prior total is given.
+        """
+        prior = [p for p in self.prior_sars if p.filed_on or p.reference]
+        if not prior:
+            return None
+        prior_total = sum(p.amount or 0 for p in prior)
+        out = {"prior_total": prior_total, "current": None, "basis": "", "cumulative": None}
+        accounts = set(self.subject.accounts)
+        df = self.flagged()
+        inflow = df[df["To_Account"].isin(accounts) & ~df["From_Account"].isin(accounts)]
+        if accounts and len(inflow) and inflow["Receiving Currency"].map(is_usd).all():
+            current = float(inflow["Amount Received"].sum())
+            out.update(current=current, cumulative=prior_total + current,
+                       basis="received by the subject's accounts in the flagged activity")
+        return out
 
     def case_facts(self) -> dict[str, str]:
         """Analyst-provided facts, flattened for the audit trail's matcher."""
@@ -171,6 +194,14 @@ class CaseInput:
                 facts[f"Prior SAR {i} filed"] = p.filed_on
             if p.amount:
                 facts[f"Prior SAR {i} amount"] = f"{p.amount:,.2f}"
+        totals = self.continuing_totals()
+        if totals and totals["prior_total"]:
+            facts["Prior SARs total"] = f"{totals['prior_total']:,.2f}"
+        if totals and totals["cumulative"] is not None:
+            facts["Current period amount"] = f"{totals['current']:,.2f}"
+            facts["Cumulative amount incl. prior SARs"] = f"{totals['cumulative']:,.2f}"
+        if self.override_reason:
+            facts["Pattern override reason"] = self.override_reason
         return {k: str(v) for k, v in facts.items() if v not in ("", None)}
 
     # ── Serialisation ──
@@ -187,6 +218,7 @@ class CaseInput:
             "investigation": asdict(self.investigation),
             "prior_sars": [asdict(p) for p in self.prior_sars],
             "pattern_override": self.pattern_override,
+            "override_reason": self.override_reason,
             "transactions": json.loads(df.to_json(orient="records")),
         }
 
@@ -205,6 +237,7 @@ class CaseInput:
             investigation=_build(Investigation, data.get("investigation")),
             prior_sars=[_build(PriorSAR, p) for p in data.get("prior_sars") or []],
             pattern_override=data.get("pattern_override", ""),
+            override_reason=data.get("override_reason", ""),
         )
 
     def fingerprint(self) -> str:
@@ -218,6 +251,42 @@ class CaseInput:
 # ── Normalisation ────────────────────────────────────────────────────────────
 
 _TRUTHY = {"1", "true", "yes", "y", "x", "t", "flagged", "suspicious"}
+
+# Currency spellings → the IBM dataset's names (used by the prompt and the rules).
+# Without this, "Euro" and "EUR" in one file looked like a currency conversion.
+CURRENCY_CODES = {
+    "US Dollar": "USD", "Euro": "EUR", "UK Pound": "GBP", "Yuan": "CNY", "Rupee": "INR",
+    "Yen": "JPY", "Swiss Franc": "CHF", "Australian Dollar": "AUD", "Canadian Dollar": "CAD",
+    "Saudi Riyal": "SAR", "Mexican Peso": "MXN", "Ruble": "RUB", "Shekel": "ILS",
+    "Brazil Real": "BRL", "Bitcoin": "BTC",
+}
+_CURRENCY_ALIASES = {
+    "$": "US Dollar", "us$": "US Dollar", "dollar": "US Dollar", "dollars": "US Dollar",
+    "us dollars": "US Dollar", "u.s. dollar": "US Dollar", "u.s. dollars": "US Dollar",
+    "€": "Euro", "euros": "Euro", "£": "UK Pound", "pound": "UK Pound", "pounds": "UK Pound",
+    "uk pounds": "UK Pound", "pound sterling": "UK Pound", "sterling": "UK Pound",
+    "rmb": "Yuan", "renminbi": "Yuan", "₹": "Rupee", "rupees": "Rupee", "¥": "Yen",
+    "swiss francs": "Swiss Franc", "australian dollars": "Australian Dollar",
+    "canadian dollars": "Canadian Dollar", "riyal": "Saudi Riyal", "saudi riyals": "Saudi Riyal",
+    "peso": "Mexican Peso", "pesos": "Mexican Peso", "mexican pesos": "Mexican Peso",
+    "rouble": "Ruble", "roubles": "Ruble", "rubles": "Ruble", "shekels": "Shekel",
+    "new israeli shekel": "Shekel", "brazilian real": "Brazil Real", "real": "Brazil Real",
+    "reais": "Brazil Real", "xbt": "Bitcoin", "bitcoins": "Bitcoin",
+}
+_CURRENCY_ALIASES.update({name.lower(): name for name in CURRENCY_CODES})
+_CURRENCY_ALIASES.update({code.lower(): name for name, code in CURRENCY_CODES.items()})
+
+
+def canonical_currency(value) -> str:
+    """'EUR', 'euro', '€' → 'Euro'. Unknown spellings are kept as given."""
+    text = str(value).strip()
+    return _CURRENCY_ALIASES.get(text.lower(), text)
+
+
+def currency_code(value) -> str:
+    """'Euro' / 'EUR' / '€' → 'EUR' (unknown spellings upper-cased)."""
+    name = canonical_currency(value)
+    return CURRENCY_CODES.get(name, name.upper())
 
 
 def _truthy(value) -> bool:
@@ -244,6 +313,8 @@ def normalise_frame(df: pd.DataFrame) -> pd.DataFrame:
     for col in ("From_Entity_Name", "To_Entity_Name"):
         df[col] = df[col].replace("", "Unknown")
     df["Payment Format"] = df["Payment Format"].replace("", "Unknown")
+    for col in ("Payment Currency", "Receiving Currency"):
+        df[col] = df[col].map(canonical_currency)
     df["Flagged"] = df["Flagged"].map(_truthy) if df["Flagged"].notna().any() else True
     df["Flagged"] = df["Flagged"].astype(bool)
     missing_id = df["Txn_ID"] == ""
@@ -350,17 +421,53 @@ def _norm_header(name: str) -> str:
     return h.strip()
 
 
+def _header_index(rows: list[list]) -> int:
+    """Row index of the column headers: the first row nearly as wide as the widest
+    row near the top. Bank exports often put a title or account line above it."""
+    def filled(row):
+        return sum(1 for c in row if str(c).strip() not in ("", "nan", "None"))
+    counts = [filled(r) for r in rows[:30]]
+    if not counts:
+        return 0
+    target = max(counts)
+    return next((i for i, n in enumerate(counts) if n >= max(2, 0.8 * target)), 0)
+
+
 def read_table(file, filename: str = "") -> pd.DataFrame:
-    """Read an uploaded CSV / XLSX as strings (types are parsed in apply_mapping)."""
+    """Read an uploaded CSV / XLSX as strings (types are parsed in apply_mapping).
+
+    Notes about how the file was read (encoding fallback, skipped title lines) are
+    kept in `df.attrs["read_notes"]` and reported by `apply_mapping` / `import_table`.
+    """
+    notes: list[dict] = []
     name = (filename or getattr(file, "name", "")).lower()
     if name.endswith((".xlsx", ".xls")):
-        return pd.read_excel(file, dtype=str)
-    raw = file.read() if hasattr(file, "read") else open(file, "rb").read()
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8-sig", errors="replace")
-    sample = raw[:4096]
-    sep = ";" if sample.count(";") > sample.count(",") else ("\t" if "\t" in sample else ",")
-    return pd.read_csv(io.StringIO(raw), dtype=str, sep=sep, skipinitialspace=True)
+        grid = pd.read_excel(file, dtype=str, header=None)
+        hdr = _header_index(grid.fillna("").values.tolist())
+        df = grid.iloc[hdr + 1:].reset_index(drop=True)
+        df.columns = [str(c).strip() for c in grid.iloc[hdr]]
+    else:
+        raw = file.read() if hasattr(file, "read") else open(file, "rb").read()
+        if isinstance(raw, bytes):
+            try:
+                raw = raw.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                raw = raw.decode("cp1252", errors="replace")
+                notes.append({"level": "warning", "message":
+                              "The file is not UTF-8, so it was read as Windows-1252 (Western "
+                              "European). Check that accented names came through correctly."})
+        sample = raw[:4096]
+        sep = ";" if sample.count(";") > sample.count(",") else ("\t" if "\t" in sample else ",")
+        lines = raw.splitlines()
+        hdr = _header_index([next(csv.reader([ln], delimiter=sep), []) for ln in lines[:30]])
+        df = pd.read_csv(io.StringIO("\n".join(lines[hdr:])), dtype=str, sep=sep,
+                         skipinitialspace=True)
+    if hdr:
+        notes.append({"level": "warning", "message":
+                      f"Skipped {hdr} line(s) above the column headers."})
+    df.attrs["read_notes"] = notes
+    df.attrs["header_row"] = hdr
+    return df
 
 
 def detect_format(df: pd.DataFrame) -> str:
@@ -407,18 +514,136 @@ def suggest_mapping(columns) -> dict[str, str]:
     return mapping
 
 
-def _parse_amount(value) -> float | None:
+_CURRENCY_AFFIX = re.compile(r"^(?:[A-Za-z]{3}\$?|US\$|[$€£₹¥])\s*|\s*(?:[A-Za-z]{3}|[$€£₹¥])$")
+_SCALE = {"k": 1e3, "m": 1e6, "mm": 1e6, "mn": 1e6, "bn": 1e9}
+_SPACES = re.compile(r"[\s\u00a0\u202f']")
+
+
+def _amount_core(value) -> tuple[str, float, bool] | None:
+    """(digits with separators, scale multiplier, negative) — None for a blank cell."""
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
     text = str(value).strip()
     if not text:
         return None
-    negative = text.startswith("(") and text.endswith(")") or text.startswith("-")
-    cleaned = re.sub(r"[^\d.]", "", text.replace(",", ""))
-    if not cleaned or cleaned.count(".") > 1:
+    negative = (text.startswith("(") and text.endswith(")")) or text.startswith(("-", "−")) \
+        or text.endswith("-")
+    text = text.strip("()").strip().lstrip("-−").rstrip("-").strip()
+    for _ in range(2):
+        text = _CURRENCY_AFFIX.sub("", text).strip()
+    scale = 1.0
+    m = re.fullmatch(r"(.*\d)\s*(k|m|mm|mn|bn)", text, re.IGNORECASE)
+    if m:
+        text, scale = m.group(1), _SCALE[m.group(2).lower()]
+    return _SPACES.sub("", text), scale, negative
+
+
+def amount_style(values) -> str:
+    """',' when a column writes amounts the European way (9.800,00), else '.'."""
+    comma = dot = dotted_thousands = comma_thousands = 0
+    for v in list(values)[:500]:
+        core = _amount_core(v)
+        if not core:
+            continue
+        t = core[0]
+        if re.search(r"\d,\d{1,2}$", t) or re.search(r"\.\d{3},", t):
+            comma += 1
+        elif re.search(r"\d\.\d{1,2}$", t) or re.search(r",\d{3}\.", t):
+            dot += 1
+        elif re.fullmatch(r"\d{1,3}(?:\.\d{3})+", t):
+            dotted_thousands += 1
+        elif re.fullmatch(r"\d{1,3}(?:,\d{3})+", t):
+            comma_thousands += 1
+    if comma > dot or (not dot and not comma and dotted_thousands > comma_thousands):
+        return ","
+    return "."
+
+
+def _parse_amount(value, decimal: str = ".") -> float | None:
+    """'$9,800.00', '9.800,00' (decimal=','), '1 234,56', '(250.00)', '$9.8k' → float.
+
+    Anything that still isn't a number after removing a currency symbol/code,
+    separators and a k/M/bn suffix is NaN (reported as an error), never a guess.
+    """
+    core = _amount_core(value)
+    if core is None:
+        return None
+    text, scale, negative = core
+    if decimal == ",":
+        text = text.replace(".", "").replace(",", ".")
+    else:
+        text = text.replace(",", "")
+    if not re.fullmatch(r"\d+(?:\.\d+)?", text):
         return float("nan")
-    amount = float(cleaned)
+    amount = float(text) * scale
     return -amount if negative else amount
+
+
+def _scaled(values) -> bool:
+    return any((c := _amount_core(v)) and c[1] != 1.0 for v in list(values)[:500])
+
+
+def date_order_ambiguous(values) -> bool:
+    """True when dates are numeric d/m/y or m/d/y and no value shows which it is."""
+    seen = False
+    for v in list(values)[:500]:
+        m = re.match(r"^\s*(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", str(v))
+        if not m:
+            continue
+        a, b = int(m[1]), int(m[2])
+        if a > 12 or b > 12:
+            return False
+        seen = seen or a != b
+    return seen
+
+
+def hygiene_issues(df: pd.DataFrame, row_offset: int = 2) -> tuple[pd.DataFrame, list[dict]]:
+    """Warnings about data that is readable but probably not what the analyst meant.
+
+    Also merges account IDs that differ only in case or spacing ("ng-4471" / "NG-4471"),
+    which would otherwise be two accounts in the money-flow graph.
+    """
+    issues: list[dict] = []
+    if df.empty:
+        return df, issues
+    df = df.copy()
+
+    def rows(mask):
+        return ", ".join(str(i + row_offset) for i in mask[mask].index[:5])
+
+    ids = pd.concat([df["From_Account"], df["To_Account"]])
+    ids = ids[ids != ""]
+    merged = []
+    for _, group in ids.groupby(ids.str.upper().str.replace(r"\s+", "", regex=True)):
+        spellings = group.value_counts()
+        if len(spellings) > 1:
+            keep = spellings.index[0]
+            for other in spellings.index[1:]:
+                df.loc[df["From_Account"] == other, "From_Account"] = keep
+                df.loc[df["To_Account"] == other, "To_Account"] = keep
+                merged.append(f"{other} → {keep}")
+    if merged:
+        issues.append({"level": "warning", "message":
+                       "Merged account IDs that differ only in capitalisation or spacing: "
+                       + ", ".join(merged[:5]) + ("…" if len(merged) > 5 else "") + "."})
+    key = ["Timestamp", "From_Account", "To_Account", "Amount Paid", "Payment Currency",
+           "Amount Received", "Receiving Currency", "Payment Format"]
+    dup = df.duplicated(subset=key)
+    if dup.any():
+        issues.append({"level": "warning", "message":
+                       f"{int(dup.sum())} duplicate row(s) exactly repeat an earlier row (file rows "
+                       f"{rows(dup)}). They are kept and counted; delete them if the export "
+                       "listed a transaction twice."})
+    same = (df["From_Account"] == df["To_Account"]) & (df["From_Account"] != "")
+    if same.any():
+        issues.append({"level": "warning", "message":
+                       f"{int(same.sum())} row(s) move money from an account to itself "
+                       f"(file rows {rows(same)})."})
+    zero = df["Amount Paid"].fillna(1) == 0
+    if zero.any():
+        issues.append({"level": "warning", "message":
+                       f"{int(zero.sum())} row(s) have a zero amount (file rows {rows(zero)})."})
+    return df, issues
 
 
 def apply_mapping(df: pd.DataFrame, mapping: dict[str, str], *, dayfirst: bool = False,
@@ -429,7 +654,8 @@ def apply_mapping(df: pd.DataFrame, mapping: dict[str, str], *, dayfirst: bool =
     Returns (canonical_frame, issues). Issues are {"level": "error"|"warning",
     "message": str}; any error means the case can't be generated yet.
     """
-    issues: list[dict] = []
+    issues: list[dict] = list(df.attrs.get("read_notes", []))
+    row_offset = 2 + int(df.attrs.get("header_row", 0))
 
     def err(msg):
         issues.append({"level": "error", "message": msg})
@@ -461,14 +687,32 @@ def apply_mapping(df: pd.DataFrame, mapping: dict[str, str], *, dayfirst: bool =
             rows = ", ".join(str(i + 2) for i in bad[bad].index[:5])
             err(f"{int(bad.sum())} date(s) could not be read (file rows {rows}).")
         out["Timestamp"] = parsed.dt.strftime(TIMESTAMP_FORMAT)
+        if date_order_ambiguous(ts_src.dropna()):
+            example = ts_src.dropna().astype(str).iloc[0]
+            warn(f"Every date could be read either way (e.g. {example}); they were read as "
+                 f"{'day/month' if dayfirst else 'month/day'}. Switch the day-first setting "
+                 "if that is wrong.")
+
+    amount_cols = [c for c in (col("debit"), col("credit"), col("amount"), col("amount_paid"),
+                               col("amount_received")) if c is not None]
+    values = pd.concat(amount_cols) if amount_cols else pd.Series(dtype=str)
+    decimal = amount_style(values)
+    if decimal == ",":
+        warn("Amounts use ',' as the decimal separator (e.g. 9.800,00 = 9,800.00) and were "
+             "read that way.")
+    if _scaled(values):
+        warn("Amounts with k / M / bn suffixes were expanded (e.g. 9.8k = 9,800.00).")
+
+    def parse(series):
+        return series.map(lambda v: _parse_amount(v, decimal))
 
     if statement:
         if not statement_account:
             err("This looks like a single-account statement (debit/credit columns). "
                 "Enter the statement's account number.")
-        debit = (col("debit").map(_parse_amount) if col("debit") is not None
+        debit = (parse(col("debit")) if col("debit") is not None
                  else pd.Series(None, index=df.index, dtype=float))
-        credit = (col("credit").map(_parse_amount) if col("credit") is not None
+        credit = (parse(col("credit")) if col("credit") is not None
                   else pd.Series(None, index=df.index, dtype=float))
         cp = col("counterparty")
         cp_name = col("counterparty_name")
@@ -498,14 +742,14 @@ def apply_mapping(df: pd.DataFrame, mapping: dict[str, str], *, dayfirst: bool =
             err("Map an amount column.")
             paid = received = pd.Series(float("nan"), index=df.index)
         else:
-            paid = (paid_src if paid_src is not None else recv_src).map(_parse_amount)
-            received = (recv_src if recv_src is not None else paid_src).map(_parse_amount)
+            paid = parse(paid_src if paid_src is not None else recv_src)
+            received = parse(recv_src if recv_src is not None else paid_src)
 
     paid = pd.to_numeric(paid, errors="coerce")
     received = pd.to_numeric(received, errors="coerce")
     bad_amount = paid.isna() | received.isna()
     if bad_amount.any() and not any(i["message"].startswith("Map an amount") for i in issues):
-        rows = ", ".join(str(i + 2) for i in bad_amount[bad_amount].index[:5])
+        rows = ", ".join(str(i + row_offset) for i in bad_amount[bad_amount].index[:5])
         err(f"{int(bad_amount.sum())} amount(s) could not be read (file rows {rows}).")
     if (paid < 0).any() or (received < 0).any():
         warn("Negative amounts were converted to positive values; direction comes from the "
@@ -554,7 +798,8 @@ def apply_mapping(df: pd.DataFrame, mapping: dict[str, str], *, dayfirst: bool =
                                           i["level"] == "error" for i in issues):
         rows = ", ".join(str(i + 2) for i in missing_accounts[missing_accounts].index[:5])
         err(f"{int(missing_accounts.sum())} row(s) are missing an account (file rows {rows}).")
-    return canonical, issues
+    canonical, hygiene = hygiene_issues(canonical, row_offset)
+    return canonical, issues + hygiene
 
 
 def import_table(df: pd.DataFrame, mapping: dict[str, str] | None = None, **kwargs
@@ -565,8 +810,9 @@ def import_table(df: pd.DataFrame, mapping: dict[str, str] | None = None, **kwar
     """
     fmt = detect_format(df)
     if fmt == "canonical" and mapping is None:
-        canonical = normalise_frame(df)
-        return canonical, [], fmt, {}
+        canonical, issues = hygiene_issues(normalise_frame(df),
+                                           2 + int(df.attrs.get("header_row", 0)))
+        return canonical, list(df.attrs.get("read_notes", [])) + issues, fmt, {}
     if mapping is None:
         mapping = IBM_TRANS_MAPPING if fmt == "ibm_trans" else suggest_mapping(df.columns)
     canonical, issues = apply_mapping(df, mapping, **kwargs)
@@ -617,7 +863,10 @@ def is_usd(currency) -> bool:
 
 def guess_dayfirst(values) -> bool:
     """True when dates look like dd/mm (some first field > 12), e.g. 13/06/2024."""
-    for v in list(values)[:200]:
+    values = list(values)[:200]
+    if values and all(re.match(r"^\s*\d{1,2}\.\d{1,2}\.\d{2,4}", str(v)) for v in values):
+        return True   # dd.mm.yyyy: dotted dates are day-first by convention
+    for v in values:
         m = re.match(r"^\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})", str(v))
         if m and int(m[1]) > 12:
             return True
@@ -677,4 +926,6 @@ def finalize_transactions(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
     if not df["Flagged"].any():
         issues.append({"level": "warning", "message":
                        "No rows are flagged, so every transaction is treated as in scope."})
-    return df, issues
+    df, hygiene = hygiene_issues(df, row_offset=1)
+    return df, issues + [dict(i, message=i["message"].replace("file rows", "rows"))
+                         for i in hygiene]

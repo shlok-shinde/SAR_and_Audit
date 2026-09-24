@@ -1308,10 +1308,10 @@ def render_metrics(narrative: str, audit: AuditRecord | None) -> None:
     if audit:
         g = grounding_counts(audit)
         stats += [
-            ("Fully grounded", f"{g['grounded']}<small>/{len(audit.narrative_sentences)}</small>",
-             "Backed by case data and analysis", ""),
+            ("Fully sourced", f"{g['grounded']}<small>/{len(audit.narrative_sentences)}</small>",
+             "Cite case data and analysis (not proof they're true)", ""),
             ("Needs attention", f"{g['unverified'] + g['ungrounded']}",
-             f"{g['unverified_values']} figure(s) not in the case data · "
+             f"{g['unverified_values']} figure(s) or relationship(s) not in the case data · "
              f"{g['ungrounded']} with no source", "alarm" if g["unverified"] else ""),
         ]
     tiles = "".join(
@@ -1332,6 +1332,16 @@ def _kv(rows: list[tuple[str, str]]) -> str:
         return ""
     return '<dl class="kv-grid">' + "".join(
         f"<dt>{html.escape(k)}</dt><dd>{html.escape(str(v))}</dd>" for k, v in rows) + "</dl>"
+
+
+def render_draft_warnings(audit: AuditRecord | None) -> None:
+    """Shortcomings the generator kept after its retry (missing expected sections,
+    no alternative explanation, prior SAR not cited)."""
+    warnings = (audit.generation_config.get("warnings") if audit and audit.generation_config
+                else None)
+    if warnings and not audit.model_used.endswith("human edit"):
+        st.warning("The draft was kept despite: " + "; ".join(warnings)
+                   + ". Fix these while editing.", icon=":material/rule:")
 
 
 def render_case_evidence() -> None:
@@ -1432,6 +1442,7 @@ def main() -> None:
     render_case_header(db_ok)
     st.space("small")
     render_metrics(st.session_state["narrative"], st.session_state.get("audit"))
+    render_draft_warnings(st.session_state.get("audit"))
     render_case_evidence()
     st.space("small")
 

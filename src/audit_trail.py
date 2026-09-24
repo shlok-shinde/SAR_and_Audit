@@ -18,7 +18,7 @@ from difflib import SequenceMatcher
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pandas as pd
 
@@ -80,6 +80,8 @@ class SentenceProvenance:
     rule_attributions: list[str] = field(default_factory=list)
     # Figures/identifiers in the sentence that the case data does not contain
     unverified_values: list[FieldReference] = field(default_factory=list)
+    # Set when the sentence can't be checked mechanically (e.g. it negates case data)
+    needs_review: str = ""
 
 
 @dataclass
@@ -187,7 +189,11 @@ _PREFIXED_AMOUNT = re.compile(
 _SUFFIXED_AMOUNT = re.compile(rf"(?P<num>{_NUM_RE})\s?(?P<cur>{_CCY_WORD_RE})\b", re.IGNORECASE)
 # Bare amounts: thousands separators or exactly two decimals ("36,052.53", "485.30").
 _BARE_AMOUNT = re.compile(r"(?<![\w/#.$€£₹¥,-])(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+\.\d{2})"
-                          r"(?![\d,]*(?:%|×|x\b|\s?times|/|:))")
+                          r"(?!\d)(?![\d,]*(?:%|×|x\b|\s?times|/|:))")
+# Legal citations are not amounts: "31 CFR 1020.320", "12 CFR 21.11", "§ 5318".
+_CITATION_BEFORE = re.compile(r"(?:\bCFR|U\.S\.C\.|§|\bSection|\bPart|\bRule)\s*$", re.IGNORECASE)
+_SCALE_WORDS = {"thousand": 1e3, "k": 1e3, "million": 1e6, "m": 1e6, "mn": 1e6,
+                "billion": 1e9, "bn": 1e9}
 
 _MONTHS = {m.lower(): i for i, m in enumerate(
     ["January", "February", "March", "April", "May", "June", "July", "August",
@@ -212,6 +218,8 @@ REGULATORY_AMOUNTS = {
     3000.0: "Funds-transfer recordkeeping threshold",
 }
 APPROXIMATE_TOLERANCE = 0.005   # "about $68,000" for $68,150.00 is within 0.5%
+# Currencies that are themselves written with "$" ("$4,352.31 AUD" is not a slip).
+DOLLAR_CURRENCIES = {"AUD", "CAD", "MXN", "NZD", "SGD", "HKD"}
 
 
 def _ccy_code(text: str | None) -> str | None:
@@ -228,7 +236,9 @@ def _to_float(num: str) -> float | None:
 
 
 def _format_money(value: float, ccy: str | None) -> str:
-    return f"${value:,.2f}" if ccy in (None, "USD") else f"{value:,.2f} {ccy}"
+    if ccy in (None, "USD"):
+        return f"${value:,.2f}"
+    return f"{value:,.2f} {'Saudi Riyal' if ccy == 'SAR$' else ccy}"
 
 
 class FactIndex:
@@ -253,7 +263,19 @@ class FactIndex:
         self._index_dates(txn_df)
         self.accounts = set(txn_df["From_Account"].astype(str)) | set(txn_df["To_Account"].astype(str))
         self.accounts.discard("")
-        # Year for "June 3" style mentions: only when the transactions span one year.
+        self.accounts_upper = {a.upper(): a for a in self.accounts}
+        numeric = [len(a) for a in self.accounts if a.isdigit()]
+        self.numeric_id_lengths = range(min(numeric) - 1, max(numeric) + 2) if numeric else range(0)
+        self.bank_ids = {str(b) for b in set(txn_df["From Bank"]) | set(txn_df["To Bank"]) if str(b)}
+        # Entity name → its accounts, so "from Lumen Trade FZE" can be checked as a relation.
+        self.entity_accounts: dict[str, set[str]] = {}
+        for side in ("From", "To"):
+            for name, acct in zip(txn_df[f"{side}_Entity_Name"].astype(str), txn_df[f"{side}_Account"]):
+                if len(name) > 3 and name != "Unknown":
+                    self.entity_accounts.setdefault(name, set()).add(acct)
+        ts = pd.to_datetime(flagged["Timestamp"], errors="coerce").dropna()
+        self.span = (ts.min(), ts.max()) if len(ts) else None
+        # Candidate years for "June 3" style mentions: every year the transactions touch.
         self.years = {d.year for d, (f, _) in self.dates.items() if f == "Timestamp"}
 
     # ── amounts ──
@@ -281,10 +303,6 @@ class FactIndex:
                     self._add(vals.min(), ccy, f"{col} (min{suffix})", "derived")
                     self._add(vals.max(), ccy, f"{col} (max{suffix})", "derived")
                     self._add(vals.mean(), ccy, f"{col} (average{suffix})", "derived")
-                # Legacy prompts summed across currencies with a "$" label.
-                self._add(scope[col].sum(), None, f"{col} (sum across currencies{suffix})", "derived")
-                self._add(scope[col].min(), None, f"{col} (min{suffix})", "derived")
-                self._add(scope[col].max(), None, f"{col} (max{suffix})", "derived")
         # Per-account inflow/outflow and per-pair totals (flagged activity).
         if {"From_Account", "To_Account"} <= set(flagged.columns) and not flagged.empty:
             rcv = flagged.groupby(["To_Account", flagged["Receiving Currency"].map(_ccy_code)])["Amount Received"]
@@ -297,9 +315,10 @@ class FactIndex:
                 self._add(v, ccy, f"Outflow from {acct} (total)", "derived")
             for (acct, ccy), v in paid.mean().items():
                 self._add(v, ccy, f"Outflow from {acct} (average)", "derived")
-            pair = flagged.groupby(["From_Account", "To_Account"])["Amount Paid"].sum()
-            for (a, b), v in pair.items():
-                self._add(v, None, f"{a} → {b} (total)", "derived")
+            pair = flagged.groupby(["From_Account", "To_Account",
+                                    flagged["Payment Currency"].map(_ccy_code)])["Amount Paid"].sum()
+            for (a, b, ccy), v in pair.items():
+                self._add(v, ccy, f"{a} → {b} (total)", "derived")
         for key, value in self.case_facts.items():
             v = _to_float(value)
             if v is not None and re.fullmatch(r"[\d,]+(?:\.\d+)?", value.strip()):
@@ -315,11 +334,21 @@ class FactIndex:
         for ev in (detection or {}).get("evidence", []):
             texts.append(("Typology detection", ev))
         for name, text in texts:
-            for value, ccy, _ in _amount_mentions(text):
-                self._add(value, ccy, name, "derived")
+            for mention in _amount_mentions(text):
+                self._add(mention.value, mention.ccy, name, "derived")
 
-    def match_amount(self, value: float, ccy: str | None) -> tuple[FieldReference | None, str]:
-        """(reference, closest-hint). Reference is None when the value isn't in the data."""
+    def match_amount(self, value: float, ccy: str | None, tolerance: float = 0.0
+                     ) -> tuple[FieldReference | None, str]:
+        """(reference, closest-hint). Reference is None when the value isn't in the data.
+
+        `tolerance` > 0 for figures stated with a scale word ("$1.2 million" ± 50,000).
+        """
+        if tolerance:
+            for cand, cand_ccy, field_name, _ in self.amounts:
+                if (not ccy or not cand_ccy or ccy == cand_ccy) and abs(cand - value) <= tolerance:
+                    return FieldReference(field_name, _format_money(value, ccy or cand_ccy),
+                                          "approximate",
+                                          note=f"data value {_format_money(cand, cand_ccy)}"), ""
         best, best_gap = None, None
         for cand, cand_ccy, field_name, match_type in self.amounts:
             if ccy and cand_ccy and ccy != cand_ccy:
@@ -337,6 +366,11 @@ class FactIndex:
         if best and rounded and best_gap <= max(best[0] * APPROXIMATE_TOLERANCE, 0.5):
             return FieldReference(best[2], _format_money(value, ccy or best[1]), "approximate",
                                   note=f"data value {_format_money(best[0], best[1])}"), ""
+        elsewhere = next(((c, cc, f) for c, cc, f, _ in self.amounts
+                          if ccy and cc and cc != ccy and abs(c - value) < 0.006), None)
+        if elsewhere:
+            return None, (f"wrong currency: the case data has {_format_money(elsewhere[0], elsewhere[1])} "
+                          f"({elsewhere[2]})")
         hint = f"closest in the case data: {_format_money(best[0], best[1])} ({best[2]})" if best else ""
         return None, hint
 
@@ -364,12 +398,37 @@ class FactIndex:
         return None, f"closest date in the case data: {closest.isoformat()}"
 
 
-def _amount_mentions(text: str) -> list[tuple[float, str | None, tuple[int, int]]]:
-    found, spans = [], []
+class Mention(NamedTuple):
+    value: float
+    ccy: str | None
+    span: tuple[int, int]
+    tolerance: float = 0.0    # > 0 when stated with a scale word ("$1.2 million")
+    note: str = ""            # e.g. "$" written on a non-dollar amount
+
+
+_SCALED_AMOUNT = re.compile(
+    rf"(?P<cur>[$€£₹¥]|\b(?:USD|EUR|GBP|INR|JPY|CNY|CHF|CAD|AUD|MXN|BRL|RUB|ILS|BTC|AED)\s?)?"
+    rf"(?P<num>\d+(?:\.\d+)?)\s?(?P<scale>thousand|million|billion|mn|bn|k|m)\b"
+    rf"(?:\s?(?P<cur2>{_CCY_WORD_RE})\b)?", re.IGNORECASE)
+
+
+def _amount_mentions(text: str) -> list[Mention]:
+    found: list[Mention] = []
+    spans: list[tuple[int, int]] = []
 
     def overlaps(span):
         return any(span[0] < e and s < span[1] for s, e in spans)
 
+    for m in _SCALED_AMOUNT.finditer(text):
+        cur = (m["cur"] or m["cur2"] or "").strip()
+        if not cur:
+            continue          # "1.2 million" with no currency may be a count
+        decimals = len(m["num"].split(".")[1]) if "." in m["num"] else 0
+        scale = _SCALE_WORDS[m["scale"].lower()]
+        code = _ccy_code(cur)
+        found.append(Mention(float(m["num"]) * scale, None if code == "SAR$" else code, m.span(),
+                             tolerance=0.5 * 10 ** -decimals * scale))
+        spans.append(m.span())
     for rx in (_PREFIXED_AMOUNT, _SUFFIXED_AMOUNT):
         for m in rx.finditer(text):
             if overlaps(m.span()):
@@ -378,64 +437,111 @@ def _amount_mentions(text: str) -> list[tuple[float, str | None, tuple[int, int]
             if value is None:
                 continue
             code = _ccy_code(m["cur"].strip())
-            found.append((value, None if code == "SAR$" else code, m.span()))
-            spans.append(m.span())
+            span, note = m.span(), ""
+            if rx is _PREFIXED_AMOUNT and m["cur"].strip() == "$":
+                # "$58,696.90 EUR" / "$41,321.30 (Brazil Real)": the currency written after
+                # the number wins. The $ contradicts it unless it is a dollar currency.
+                after = re.match(rf"\s?\(?({_CCY_WORD_RE})\b\)?", text[m.end():], re.IGNORECASE)
+                if after and _ccy_code(after.group(1)) not in ("USD", None):
+                    code = _ccy_code(after.group(1))
+                    span = (m.start(), m.end() + after.end())
+                    if code not in DOLLAR_CURRENCIES:
+                        note = f"written with a $ sign, but the amount is in {after.group(1)}"
+            found.append(Mention(value, None if code == "SAR$" else code, span, note=note))
+            spans.append(span)
     for m in _BARE_AMOUNT.finditer(text):
-        if overlaps(m.span()):
+        if overlaps(m.span()) or _CITATION_BEFORE.search(text[:m.start()]):
             continue
         value = _to_float(m[1])
         if value is not None:
-            found.append((value, None, m.span()))
+            found.append(Mention(value, None, m.span()))
             spans.append(m.span())
     return found
 
 
-def _date_mentions(text: str, years: set[int]) -> list:
-    """Calendar dates mentioned in the text (year inferred when the data spans one year)."""
-    from datetime import date as _date
-    out = []
-    default_year = next(iter(years)) if len(years) == 1 else None
+def _date_mentions(text: str, years: set[int]) -> list[tuple[list, str]]:
+    """Calendar dates in the text as (candidate dates, raw text).
 
-    def add(y, mo, d):
+    An explicit year gives one candidate. A year-less "June 3" gives one per year the
+    case data touches, so a case spanning New Year is still checked. An empty
+    candidate list means the text names a date that doesn't exist ("June 31, 2024").
+    """
+    from datetime import date as _date
+    out: list[tuple[list, str]] = []
+    candidate_years = sorted(years)
+
+    def make(y, mo, d):
         try:
-            out.append(_date(int(y), int(mo), int(d)))
+            return _date(int(y), int(mo), int(d))
         except (ValueError, TypeError):
-            pass
+            return None
+
+    def add(raw, ys, mo, d):
+        out.append(([x for x in (make(y, mo, d) for y in ys) if x], raw))
 
     taken = []
     for m in _DATE_YMD.finditer(text):
-        add(m[1], m[2], m[3])
+        add(m.group(0), [m[1]], m[2], m[3])
         taken.append(m.span())
     for m in _DATE_NUMERIC.finditer(text):
         if not any(s <= m.start() < e for s, e in taken):
             a, b = int(m[1]), int(m[2])
             month, day = (a, b) if a <= 12 else (b, a)   # US order unless impossible
-            add(m[3], month, day)
+            add(m.group(0), [m[3]], month, day)
     for m in _DATE_MDY.finditer(text):
-        year = m[4] or default_year
-        if not year:
+        ys = [m[4]] if m[4] else candidate_years
+        if not ys:
             continue
         month = _MONTHS[m[1].lower().rstrip(".")]
-        add(year, month, m[2])
+        add(m.group(0), ys, month, m[2])
         if m[3]:
-            add(year, month, m[3])
+            add(m.group(0), ys, month, m[3])
     for m in _DATE_DMY.finditer(text):
-        year = m[3] or default_year
-        if year:
-            add(year, _MONTHS[m[2].lower().rstrip(".")], m[1])
+        ys = [m[3]] if m[3] else candidate_years
+        if ys:
+            add(m.group(0), ys, _MONTHS[m[2].lower().rstrip(".")], m[1])
     return out
 
 
-_NUMBER_WORDS = {w: i for i, w in enumerate(
-    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
-    "fifteen sixteen seventeen eighteen nineteen twenty".split())}
+def dates_in_text(text: str, years: set[int]) -> set:
+    """Every calendar date the text mentions (year-less ones resolved against `years`)."""
+    return {d for dates, _ in _date_mentions(text, years) for d in dates}
+
+
+_UNITS = ("zero one two three four five six seven eight nine ten eleven twelve thirteen "
+          "fourteen fifteen sixteen seventeen eighteen nineteen").split()
+_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70,
+         "eighty": 80, "ninety": 90}
+_NUMBER_WORDS = {w: i for i, w in enumerate(_UNITS)} | _TENS | {"a dozen": 12}
+_NUM_RE = (r"\d{1,4}|a dozen|(?:" + "|".join(_TENS) + r")(?:[- ](?:" + "|".join(_UNITS[1:10])
+           + r"))?|" + "|".join(sorted(_UNITS, key=len, reverse=True)))
+
+
+def _num_value(raw: str) -> int:
+    raw = raw.lower()
+    if raw.isdigit():
+        return int(raw)
+    if raw in _NUMBER_WORDS:
+        return _NUMBER_WORDS[raw]
+    tens, unit = re.split(r"[- ]", raw)
+    return _TENS[tens] + _UNITS.index(unit)
+
+
+_COUNT_ADJECTIVES = (
+    "separate|distinct|different|individual|international|outgoing|incoming|outbound|inbound|"
+    "unique|originating|sending|source|destination|beneficiary|counterparty|intermediary|mule|"
+    "external|foreign|domestic|offshore|overseas|cross-border|suspicious|flagged|structured|"
+    "sequential|consecutive|subsequent|related|linked|third-party|ACH|electronic|large")
 _COUNT_CLAIM = re.compile(
-    r"\b(\d{1,4}|" + "|".join(_NUMBER_WORDS) + r")\s+(?:separate\s+|distinct\s+|different\s+|"
-    r"individual\s+|international\s+|outgoing\s+|incoming\s+|outbound\s+|inbound\s+)*"
+    rf"\b({_NUM_RE})\s+(?:(?:{_COUNT_ADJECTIVES})\s+)*"
     r"(cash\s+deposits?|deposits?|wire\s+transfers?|wires?|withdrawals?|transactions?|"
     r"transfers?|payments?|senders?|depositors?|recipients?|beneficiar(?:y|ies)|"
-    r"receiving\s+accounts?|accounts?)\b",
+    r"receiving\s+accounts?|accounts?|(?:financial\s+)?institutions?|banks?)\b",
     re.IGNORECASE)
+# "the first three deposits", "another two wires": a subset, not the case's total.
+_SUBSET_BEFORE = re.compile(r"\b(?:first|last|initial|final|another|additional|further|remaining|"
+                            r"other|next|earliest|latest|largest|smallest|former|latter)\s+$",
+                            re.IGNORECASE)
 
 
 def _count_candidates(index: "FactIndex") -> dict[str, set[int]]:
@@ -461,10 +567,25 @@ def _count_candidates(index: "FactIndex") -> dict[str, set[int]]:
         "sender": set(senders) | {flagged["From_Account"].nunique()},
         "recipient": set(recipients) | {flagged["To_Account"].nunique()},
         "account": accounts | set(senders) | set(recipients),
+        "bank": _bank_counts(flagged) | _bank_counts(df),
     }
 
 
-_COUNT_NOUN = [("cash deposit", "cash deposit"), ("depositor", "sender"), ("deposit", "deposit"),
+def _bank_counts(df: pd.DataFrame) -> set[int]:
+    """Total, sending-side and receiving-side institution counts (names, else IDs)."""
+    out = set()
+    for cols in (("From_Bank_Name", "To_Bank_Name"), ("From Bank", "To Bank")):
+        if not set(cols) <= set(df.columns):
+            continue
+        send = set(df[cols[0]].astype(str)) - {"", "nan"}
+        recv = set(df[cols[1]].astype(str)) - {"", "nan"}
+        if send or recv:
+            out |= {len(send | recv), len(send), len(recv)}
+    return out
+
+
+_COUNT_NOUN = [("financial institution", "bank"), ("institution", "bank"), ("bank", "bank"),
+               ("cash deposit", "cash deposit"), ("depositor", "sender"), ("deposit", "deposit"),
                ("wire", "wire"), ("withdrawal", "withdrawal"), ("sender", "sender"),
                ("recipient", "recipient"), ("beneficiar", "recipient"),
                ("receiving account", "recipient"), ("account", "account"),
@@ -479,8 +600,10 @@ def _check_counts(sentence: str, index: "FactIndex") -> list[FieldReference]:
     candidates = None
     out = []
     for m in _COUNT_CLAIM.finditer(sentence):
+        if _SUBSET_BEFORE.search(sentence[:m.start()]):
+            continue
         raw, noun = m.group(1).lower(), re.sub(r"\s+", " ", m.group(2).lower())
-        n = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
+        n = _num_value(raw)
         if n <= 1:
             continue
         key = next(k for prefix, k in _COUNT_NOUN if noun.startswith(prefix))
@@ -491,6 +614,274 @@ def _check_counts(sentence: str, index: "FactIndex") -> list[FieldReference]:
             out.append(FieldReference("Count", m.group(0), "unverified",
                                       note=f"counts in the case data for this: {hint}"))
     return out
+
+
+# Phrases that state how long the whole activity lasted. "within 48 hours" is left
+# alone: it usually describes a sub-period (e.g. rapid pass-through).
+_DURATION = re.compile(
+    rf"\b(?:(?:spanning|spanned|spans|covering|covered|lasting|lasted)\s+(?:a\s+|an\s+)?|"
+    rf"(?:total\s+)?(?:time\s?frame|period|span)\s+of\s+|"
+    rf"(?:over|during|across|in)\s+(?:a|an)\s+(?=(?:{_NUM_RE})[- ](?:day|hour|week|month)[- ]"
+    rf"(?:period|span|timeframe)))"
+    rf"(?:(?:approximately|about|roughly|nearly|almost|some|just\s+over|just\s+under|a\s+total\s+of)\s+)?"
+    rf"(?P<n>{_NUM_RE})[- ](?P<unit>day|hour|week|month)s?\b", re.IGNORECASE)
+
+
+def _check_duration(sentence: str, index: "FactIndex") -> list[FieldReference]:
+    """'approximately 16 days' for activity that lasted six (live year-boundary draft)."""
+    if not index.span:
+        return []
+    first, last = index.span
+    days = (last - first).total_seconds() / 86400
+    calendar_days = (last.date() - first.date()).days + 1
+    out = []
+    for m in _DURATION.finditer(sentence):
+        n, unit = _num_value(m["n"]), m["unit"].lower()
+        if unit == "day":
+            ok = min(abs(n - days), abs(n - calendar_days)) <= 1
+            actual = f"{calendar_days} calendar days"
+        elif unit == "hour":
+            ok = abs(n - days * 24) <= max(1.5, 0.05 * days * 24)
+            actual = f"{days * 24:.0f} hours"
+        elif unit == "week":
+            ok = abs(n - days / 7) <= 1
+            actual = f"{days / 7:.1f} weeks"
+        else:
+            ok = abs(n - days / 30.44) <= 1
+            actual = f"{days / 30.44:.1f} months"
+        if not ok:
+            out.append(FieldReference("Duration", m.group(0).strip(), "unverified",
+                                      note=f"the flagged activity runs {first:%Y-%m-%d %H:%M} to "
+                                           f"{last:%Y-%m-%d %H:%M} ({actual})"))
+    return out
+
+
+_TOKEN = re.compile(r"(?<![\w-])[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?![\w-])")
+
+
+def _identifier_like(token: str, index: "FactIndex") -> bool:
+    """Could this token be an account/reference number (so an unknown one is suspect)?"""
+    if re.fullmatch(r"\d+-[a-z]+|\d+(?:st|nd|rd|th)", token):
+        return False              # "150-degree", "95-hour", "4th"
+    if _IDENTIFIER.fullmatch(token):
+        return True
+    digits = sum(ch.isdigit() for ch in token)
+    if token.isdigit():
+        return len(token) >= 6 and len(token) in index.numeric_id_lengths
+    return any(ch.isalpha() for ch in token) and digits >= 3 and ("-" in token or len(token) >= 6)
+
+
+def _check_identifiers(sentence: str, index: "FactIndex"
+                       ) -> tuple[list[FieldReference], list[FieldReference]]:
+    refs, unverified = [], []
+    fact_values = {v.upper(): k for k, v in index.case_facts.items()}
+    for token in dict.fromkeys(_TOKEN.findall(sentence)):
+        up = token.upper()
+        if up in index.accounts_upper:
+            refs.append(FieldReference("Account", index.accounts_upper[up], "exact"))
+        elif token in index.bank_ids and len(token) >= 3 and not token.isalpha():
+            refs.append(FieldReference("Bank ID", token, "exact"))
+        elif not _identifier_like(token, index):
+            continue
+        elif index.reference_text and token in index.reference_text:
+            refs.append(FieldReference("Regulatory reference", token, "regulatory"))
+        elif up in fact_values:
+            refs.append(FieldReference(fact_values[up], token, "case_fact"))
+        else:
+            partial = next((a for u, a in sorted(index.accounts_upper.items())
+                            if len(up) >= 4 and up in u), None)
+            note = (f"partial account number — did you mean {partial}?" if partial
+                    else "no account or reference with this ID in the case")
+            unverified.append(FieldReference("Identifier", token, "unverified", note=note))
+    return refs, unverified
+
+
+def _word_in(needle: str, haystack: str) -> bool:
+    return re.search(rf"(?<!\w){re.escape(needle)}(?!\w)", haystack) is not None
+
+
+# ── Relations: do the account, amount, direction and method belong together? ──
+
+# Verbs only — "wires"/"transfers" are left out because they are usually nouns.
+_OUT_VERB = re.compile(r"\b(?:send|sent|sends|wired|transferred|remitted|paid|pays|disbursed|"
+                       r"forwarded|routed|initiated|executed|moved)\b", re.IGNORECASE)
+_IN_VERB = re.compile(r"\b(?:receive|received|receives|collected|credited|accepted|obtained)\b",
+                      re.IGNORECASE)
+_METHODS = {"cash": r"\bcash\b", "wire": r"\bwires?\b|\bwire transfers?\b|\bwired\b",
+            "ach": r"\bACH\b", "check": r"\bche(?:ck|que)s?\b", "bitcoin": r"\bbitcoin|crypto"}
+_NEGATION = re.compile(r"\b(?:did|does|do|was|were|has|have|had) not\b|\bnever\b|n't\b|"
+                       r"\bno (?:cash|deposits?|transfers?|transactions?|wires?|payments?|funds|activity)\b|"
+                       r"\bwithout any\b", re.IGNORECASE)
+
+
+def _account_mentions(sentence: str, index: "FactIndex") -> list[tuple[int, set[str]]]:
+    """(position, accounts) for each account ID or known entity name in the sentence."""
+    found = []
+    for m in _TOKEN.finditer(sentence):
+        acct = index.accounts_upper.get(m.group(0).upper())
+        if acct:
+            found.append((m.start(), {acct}))
+    lower = sentence.lower()
+    for name, accts in index.entity_accounts.items():
+        m = re.search(rf"(?<!\w){re.escape(name.lower())}(?!\w)", lower)
+        if m:
+            found.append((m.start(), set(accts)))
+    return sorted(found, key=lambda x: x[0])
+
+
+def _roles(sentence: str, index: "FactIndex") -> tuple[set[str], set[str], str | None]:
+    """(from-accounts, to-accounts, method) the sentence asserts, from prepositions
+    ("from X", "to Y and Z") and the account named before an in/out verb."""
+    tagged = []           # (position, accounts, role) with role "from" | "to" | None
+    last = None
+    for pos, accts in _account_mentions(sentence, index):
+        before = sentence[max(0, pos - 30):pos].lower()
+        prep = re.search(r"\b(from|to|into|and|or)\s+(?:(?:the|an?|account|accounts|holder|"
+                         r"of|its|their)\s+)*$|(,)\s*$", before)
+        word = prep and (prep.group(1) or prep.group(2))
+        role = ("from" if word == "from" else "to" if word in ("to", "into")
+                else last if word in ("and", "or", ",") else None)
+        tagged.append((pos, accts, role))
+        last = role
+    senders = set().union(*[a for _, a, r in tagged if r == "from"])
+    receivers = set().union(*[a for _, a, r in tagged if r == "to"])
+    verbs = [v for v in (_OUT_VERB.search(sentence), _IN_VERB.search(sentence)) if v]
+    if verbs:
+        verb = min(verbs, key=lambda v: v.start())
+        actor = [a for pos, a, r in tagged if pos < verb.start() and r is None]
+        if actor:
+            (senders if _OUT_VERB.fullmatch(verb.group(0)) else receivers).update(actor[-1])
+    method = next((k for k, rx in _METHODS.items() if re.search(rx, sentence, re.IGNORECASE)), None)
+    return senders, receivers, method
+
+
+def _relation_rows(index: "FactIndex", senders, receivers, method) -> pd.DataFrame:
+    rows = index.df
+    if senders:
+        rows = rows[rows["From_Account"].isin(senders)]
+    if receivers:
+        rows = rows[rows["To_Account"].isin(receivers)]
+    if method:
+        rows = rows[rows["Payment Format"].astype(str).str.contains(
+            {"cash": "cash", "wire": "wire", "ach": "ach", "check": "che", "bitcoin": "bitcoin"}[method],
+            case=False)]
+    return rows
+
+
+def _relation_values(rows: pd.DataFrame) -> list[tuple[float, str | None]]:
+    """Every figure a sentence about these rows could state: each transfer, and the
+    total / average / min / max, per currency and per flagged-or-all scope."""
+    vals = []
+    scopes = [rows]
+    if "Flagged" in rows.columns and rows["Flagged"].astype(bool).any():
+        scopes.append(rows[rows["Flagged"].astype(bool)])
+    for scope in scopes:
+        for col, ccy_col in (("Amount Paid", "Payment Currency"), ("Amount Received", "Receiving Currency")):
+            for ccy, g in scope.groupby(scope[ccy_col].map(_ccy_code)):
+                vals += [(v, ccy) for v in g[col]]
+                vals += [(g[col].sum(), ccy), (g[col].mean(), ccy), (g[col].min(), ccy),
+                         (g[col].max(), ccy)]
+                for _, pair in g.groupby(["From_Account", "To_Account"]):
+                    vals.append((pair[col].sum(), ccy))
+    return vals
+
+
+def _describe(index: "FactIndex", value: float) -> str:
+    rows = index.df[(index.df["Amount Paid"] - value).abs() < 0.006]
+    if rows.empty:
+        return ""
+    r = rows.iloc[0]
+    return (f"{_format_money(value, _ccy_code(r['Payment Currency']))} was a {r['Payment Format']} "
+            f"transfer from {r['From_Account']} to {r['To_Account']} on {str(r['Timestamp'])[:10]}")
+
+
+# Where one claim ends and the next begins inside a sentence: "… aggregated into
+# NG-4471, followed by the disbursement of $67,500.00 via two wires …".
+_CLAUSE_BREAK = re.compile(r";|,\s*(?:and\s+)?(?:followed by|then|which|before|after|while|whereas|"
+                           r"subsequently)\b|\b(?:followed by|and then|and subsequently)\b",
+                           re.IGNORECASE)
+
+
+def _clause_of(sentence: str, span: tuple[int, int]) -> str:
+    start, end = 0, len(sentence)
+    for m in _CLAUSE_BREAK.finditer(sentence):
+        if m.end() <= span[0]:
+            start = m.end()
+        elif m.start() >= span[1]:
+            end = m.start()
+            break
+    return sentence[start:end]
+
+
+def _check_relations(sentence: str, mentions: list[Mention], index: "FactIndex"
+                     ) -> list[FieldReference]:
+    """A verified amount stated for the wrong account, direction or payment method.
+
+    Roles and payment method are read from the amount's own clause only."""
+    if len(mentions) != 1:
+        return []     # several figures: can't tell which belongs to which account
+    senders, receivers, method = _roles(_clause_of(sentence, mentions[0].span), index)
+    if not senders and not receivers:
+        return []
+    mention = mentions[0]
+    rows = _relation_rows(index, senders, receivers, method)
+    for v, ccy in _relation_values(rows):
+        if mention.ccy and ccy and mention.ccy != ccy:
+            continue
+        gap = abs(v - mention.value)
+        rounded = abs(mention.value - round(mention.value)) < 0.005
+        if (gap < 0.006 or (mention.tolerance and gap <= mention.tolerance)
+                or (rounded and gap <= max(v * APPROXIMATE_TOLERANCE, 0.5))):
+            return []
+    parts = []
+    if senders:
+        parts.append("from " + "/".join(sorted(senders)))
+    if receivers:
+        parts.append("to " + "/".join(sorted(receivers)))
+    if method:
+        parts.append(f"by {method}")
+    where = _describe(index, mention.value)
+    return [FieldReference(
+        "Relationship", f"{_format_money(mention.value, mention.ccy)} {' '.join(parts)}", "unverified",
+        note=(f"no such transfer in the case data; {where}" if where
+              else "the amount exists, but not for these accounts / this payment method"))]
+
+
+_RELATIVE_TIME = re.compile(r"\b(?:before|after|prior to|until|since|previously|earlier)\b",
+                            re.IGNORECASE)
+_MONTH_YEAR = re.compile(rf"\b({_MON_RE})\s+(\d{{4}})\b", re.IGNORECASE)
+
+
+def _check_negation(sentence: str, index: "FactIndex") -> list[FieldReference]:
+    """'NG-4471 did not receive any cash deposits in June 2024' when the data shows seven.
+
+    Only absolute claims are checked; "before May" style qualifiers are left to the
+    reviewer (the sentence is marked needs-review instead)."""
+    if not _NEGATION.search(sentence) or _RELATIVE_TIME.search(sentence):
+        return []
+    senders, receivers, method = _roles(sentence, index)
+    if not senders and not receivers:
+        return []
+    rows = _relation_rows(index, senders, receivers, method)
+    months = {(int(y), _MONTHS[m.lower().rstrip(".")]) for m, y in _MONTH_YEAR.findall(sentence)}
+    if months and not rows.empty:
+        ts = pd.to_datetime(rows["Timestamp"], errors="coerce")
+        rows = rows[[(t.year, t.month) in months for t in ts]]
+    if rows.empty:
+        return []
+    who = "/".join(sorted(receivers or senders))
+    kind = f"{method} " if method else ""
+    return [FieldReference(
+        "Claim", sentence[:80], "unverified",
+        note=f"the case data has {len(rows)} {kind}transfer(s) "
+             f"{'into' if receivers else 'from'} {who}")]
+
+
+def needs_review(sentence: str, refs: list[FieldReference]) -> str:
+    """Why a sentence can't be trusted on its references alone ('' if it can)."""
+    if refs and _NEGATION.search(sentence):
+        return "States that something did not happen — check it against the case data"
+    return ""
 
 
 def check_sentence_facts(
@@ -507,36 +898,41 @@ def check_sentence_facts(
     lower = sentence.lower()
 
     # 1. Amounts
-    for value, ccy, _ in _amount_mentions(sentence):
-        ref, hint = index.match_amount(value, ccy)
-        if ref:
+    mentions = _amount_mentions(sentence)
+    data_mentions = []        # figures that come from the transactions themselves
+    for mention in mentions:
+        ref, hint = index.match_amount(mention.value, mention.ccy, mention.tolerance)
+        if ref and ref.match_type in ("exact", "derived", "approximate") and not ref.field_name.startswith(
+                ("Red flag", "Typology")):
+            data_mentions.append(mention)
+        if ref and not mention.note:
             refs.append(ref)
+        elif ref:
+            unverified.append(FieldReference("Amount", ref.field_value, "unverified",
+                                             note=f"{mention.note} — fix the currency before filing"))
         else:
-            unverified.append(FieldReference("Amount", _format_money(value, ccy),
+            unverified.append(FieldReference("Amount", _format_money(mention.value, mention.ccy),
                                              "unverified", note=hint))
 
     # 2. Dates
-    for d in _date_mentions(sentence, index.years):
-        ref, hint = index.match_date(d)
-        if ref:
-            refs.append(ref)
+    for dates, raw in _date_mentions(sentence, index.years):
+        if not dates:
+            unverified.append(FieldReference("Date", raw, "unverified",
+                                             note="not a valid calendar date"))
+            continue
+        matched = [d for d in dates if d in index.dates]
+        if matched:
+            refs.append(index.match_date(matched[0])[0])
         else:
-            unverified.append(FieldReference("Date", d.isoformat(), "unverified", note=hint))
+            unverified.append(FieldReference("Date", dates[0].isoformat(), "unverified",
+                                             note=index.match_date(dates[0])[1]))
 
-    # 3. Account numbers and other identifiers
-    fact_values = {v.upper(): k for k, v in index.case_facts.items()}
-    for token in dict.fromkeys(_IDENTIFIER.findall(sentence)):
-        if token in index.accounts:
-            refs.append(FieldReference("Account", token, "exact"))
-        elif index.reference_text and token in index.reference_text:
-            refs.append(FieldReference("Regulatory reference", token, "regulatory"))
-        elif token.upper() in fact_values:
-            refs.append(FieldReference(fact_values[token.upper()], token, "case_fact"))
-        elif not any(token in a for a in index.accounts):
-            unverified.append(FieldReference("Identifier", token, "unverified",
-                                             note="no account or reference with this ID in the case"))
+    # 3. Account numbers and other identifiers (any shape: NG-4471, 5500123456, ab-12345)
+    id_refs, id_unverified = _check_identifiers(sentence, index)
+    refs += id_refs
+    unverified += id_unverified
 
-    # 4. Entity and bank names from the transactions
+    # 4. Entity and bank names from the transactions (whole words only)
     for cols, min_len in ((("From_Entity_Name", "To_Entity_Name"), 3),
                           (("From_Bank_Name", "To_Bank_Name"), 4)):
         seen = set()
@@ -546,13 +942,13 @@ def check_sentence_facts(
             for name in df[col].dropna().unique():
                 name = str(name)
                 if (name and name != "Unknown" and name not in seen and len(name) > min_len
-                        and name.lower() in lower):
+                        and _word_in(name.lower(), lower)):
                     seen.add(name)
                     refs.append(FieldReference(col, name, "entity_name"))
 
     # 5. Analyst-provided case facts quoted as text (name, occupation, address…)
     for key, value in index.case_facts.items():
-        if len(value) >= 4 and not re.fullmatch(r"[\d,.\-]+", value) and value.lower() in lower:
+        if len(value) >= 4 and not re.fullmatch(r"[\d,.\-]+", value) and _word_in(value.lower(), lower):
             refs.append(FieldReference(key, value, "case_fact"))
 
     # 6. Counts ("10 transactions", "11 accounts") — matched, never flagged:
@@ -582,6 +978,11 @@ def check_sentence_facts(
                 break
 
     unverified += _check_counts(sentence, index)
+    unverified += _check_duration(sentence, index)
+    # 7. Relationships between verified values, and negated facts
+    if not any(u.field_name == "Amount" for u in unverified) and len(data_mentions) == len(mentions):
+        unverified += _check_relations(sentence, data_mentions, index)
+    unverified += _check_negation(sentence, index)
     return refs, unverified
 
 
@@ -635,13 +1036,17 @@ def grounding_status(sent) -> str:
     """unverified > grounded (data + analysis) > partial (either) > ungrounded.
 
     Data = transaction fields or analyst case facts. Analysis = retrieved
-    regulatory context or rule-based red-flag evidence.
+    regulatory context or rule-based red-flag evidence. A sentence that needs
+    review (e.g. a negation) is never "grounded".
+
+    These measure SOURCING, not truth: a sentence can cite real values and still be
+    wrong. The UI labels them Sourced / Partly sourced / Unsourced / Unverified.
     """
     if getattr(sent, "unverified_values", None):
         return "unverified"
     has_data = bool(sent.field_references)
     has_analysis = bool(sent.chunk_attributions) or bool(getattr(sent, "rule_attributions", None))
-    if has_data and has_analysis:
+    if has_data and has_analysis and not getattr(sent, "needs_review", ""):
         return "grounded"
     if has_data or has_analysis:
         return "partial"
@@ -669,6 +1074,35 @@ def table_cells(row: str) -> list[str]:
     if row.endswith("|"):
         row = row[:-1]
     return [c.strip() for c in row.split("|")]
+
+
+_SECTION_WORDS = [("who", "Who"), ("what", "What"), ("when", "When"), ("where", "Where"),
+                  ("why", "Why Suspicious"), ("how", "How"), ("supporting", "Supporting Pattern"),
+                  ("quantitative", "Quantitative Summary")]
+_SECTION_NAMES = {name for _, name in _SECTION_WORDS}
+
+
+def _section_name(heading: str) -> str:
+    lower = heading.lower()
+    first = re.match(r"\W*(\w+)", lower)
+    for word, name in _SECTION_WORDS:
+        if first and first.group(1) == word:
+            return name
+    for word, name in _SECTION_WORDS:
+        if re.search(rf"\b{word}\b", lower):
+            return name
+    return heading
+
+
+# Abbreviations whose full stop doesn't end a sentence ("U.S. accounts", "Mr. Kumar").
+_DOT = "\u2024"
+_ABBREVIATIONS = re.compile(
+    r"\b(?:U\.S|U\.K|U\.A\.E|e\.g|i\.e|Mr|Mrs|Ms|Dr|Inc|Ltd|Co|Corp|St|vs|approx)\.(?=\s)"
+    r"|\bNo\.(?=\s*\d)|\b[ap]\.m\.(?=\s+[a-z])")
+
+
+def _protect_abbreviations(line: str) -> str:
+    return _ABBREVIATIONS.sub(lambda m: m.group(0).replace(".", _DOT), line)
 
 
 def parse_narrative_into_sentences(narrative_text: str) -> list[SentenceProvenance]:
@@ -702,28 +1136,19 @@ def parse_narrative_into_sentences(narrative_text: str) -> list[SentenceProvenan
                 sent_idx += 1
             continue
 
+        # A bold line that names a section ("**Who (Subject Identification)**") is a
+        # heading too — reviewers sometimes restyle headings in the editor.
+        bold = re.fullmatch(r"\*\*([^*]+?)\*\*:?", line)
+        if bold and _section_name(bold.group(1)) in _SECTION_NAMES:
+            current_section = _section_name(bold.group(1))
+            continue
+
         # Check for section header
         header_match = SECTION_HEADER_PATTERN.match(line)
         if header_match:
             current_section = re.sub(r"^\d+[.)]\s*", "", header_match.group(1).strip())
-            # Normalize section names
-            section_lower = current_section.lower()
-            if "who" in section_lower:
-                current_section = "Who"
-            elif "what" in section_lower:
-                current_section = "What"
-            elif "when" in section_lower:
-                current_section = "When"
-            elif "where" in section_lower:
-                current_section = "Where"
-            elif "why" in section_lower:
-                current_section = "Why Suspicious"
-            elif "how" in section_lower:
-                current_section = "How"
-            elif "supporting" in section_lower:
-                current_section = "Supporting Pattern"
-            elif "quantitative" in section_lower:
-                current_section = "Quantitative Summary"
+            # Normalize section names (whole words: "whole period" is not "Who")
+            current_section = _section_name(current_section)
             continue
 
         # Skip the title, rules, and the bold metadata block above the first
@@ -736,9 +1161,9 @@ def parse_narrative_into_sentences(narrative_text: str) -> list[SentenceProvenan
             continue
 
         # Split line into sentences (rough split on period + space or end)
-        raw_sentences = re.split(r"(?<=[.!?])\s+", line)
+        raw_sentences = re.split(r"(?<=[.!?])\s+", _protect_abbreviations(line))
         for raw_sent in raw_sentences:
-            raw_sent = raw_sent.strip()
+            raw_sent = raw_sent.replace(_DOT, ".").strip()
             if len(raw_sent) < 10:  # skip very short fragments
                 continue
             sentences.append(SentenceProvenance(
@@ -846,6 +1271,8 @@ def build_audit_record(
     for sent in sentences:
         sent.field_references, sent.unverified_values = check_sentence_facts(
             sent.sentence_text, txn_df, case_facts, index)
+        if not sent.unverified_values:
+            sent.needs_review = needs_review(sent.sentence_text, sent.field_references)
 
     # Analysis: retrieved regulatory context and rule-based red flags
     if retrieval_metadata and retrieval_metadata.chunks_returned:
@@ -882,8 +1309,10 @@ def build_audit_record(
     for sent in sentences:
         status = grounding_status(sent)
         if status == "unverified":
-            sent.confidence_note = ("Contains figures or identifiers not found in the case "
-                                    "data — verify before filing")
+            sent.confidence_note = ("Contains figures, identifiers or relationships not found "
+                                    "in the case data — verify before filing")
+        elif sent.needs_review:
+            sent.confidence_note = sent.needs_review
         elif sent.field_references and (sent.chunk_attributions or sent.rule_attributions):
             sent.confidence_note = "Grounded in both case data and analysis (context or rules)"
         elif sent.field_references:
@@ -1134,8 +1563,8 @@ def generate_provenance_report(audit_record: AuditRecord) -> str:
     lines.append(f"| Metric | Value |")
     lines.append(f"|---|---|")
     lines.append(f"| Total sentences | {total_sentences} |")
-    lines.append(f"| Grounded (data and/or context) | {grounded_count} ({grounded_count/max(total_sentences,1)*100:.0f}%) |")
-    lines.append(f"| Ungrounded | {ungrounded_count} ({ungrounded_count/max(total_sentences,1)*100:.0f}%) |")
+    lines.append(f"| Sourced (data and/or context) | {grounded_count} ({grounded_count/max(total_sentences,1)*100:.0f}%) |")
+    lines.append(f"| Unsourced | {ungrounded_count} ({ungrounded_count/max(total_sentences,1)*100:.0f}%) |")
     lines.append(f"| Unverified figures (not in case data) | {unverified_count} |")
 
     # Count unique field references
