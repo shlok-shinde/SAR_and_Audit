@@ -22,6 +22,10 @@ from typing import Any, NamedTuple
 
 import pandas as pd
 
+from countries import CURRENCY_COUNTRY, canonical_country, country_mentions
+
+_IBM_FOREIGN_BANK = re.compile(r"[A-Z][A-Za-z ]+ Bank #\d+")
+
 
 # ── Data Structures ──────────────────────────────────────────────────────────
 
@@ -277,6 +281,53 @@ class FactIndex:
         self.span = (ts.min(), ts.max()) if len(ts) else None
         # Candidate years for "June 3" style mentions: every year the transactions touch.
         self.years = {d.year for d, (f, _) in self.dates.items() if f == "Timestamp"}
+        self.countries = self._index_countries(txn_df, red_flags, detection)
+
+    def _index_countries(self, df, red_flags, detection) -> dict[str, tuple[str, str]]:
+        """Every country the case data supports → (field, value it came from).
+
+        IBM data has no country column: countries appear in bank names ("China
+        Bank #6"), so country columns, bank and entity names, single-country
+        currencies, case facts and rule evidence are all searched.
+        """
+        found: dict[str, tuple[str, str]] = {}
+        for col in ("From_Country", "To_Country"):
+            if col in df.columns:
+                for value in df[col].dropna().unique():
+                    if name := canonical_country(value):
+                        found.setdefault(name, (col, str(value)))
+        for col in ("From_Bank_Name", "To_Bank_Name", "From_Entity_Name", "To_Entity_Name"):
+            if col in df.columns:
+                for value in df[col].dropna().unique():
+                    for name, _, _ in country_mentions(str(value)):
+                        found.setdefault(name, (col, str(value)))
+        # IBM AMLworld names every foreign bank "<Country> Bank #n" (19,585 banks) and
+        # every US bank without a number ("National Bank of the East", 468 banks). Only
+        # when a case follows that convention is an unnumbered bank taken as American.
+        banks = [(col, str(v)) for col in ("From_Bank_Name", "To_Bank_Name") if col in df.columns
+                 for v in df[col].dropna().unique() if str(v)]
+        if any(_IBM_FOREIGN_BANK.fullmatch(v) for _, v in banks):
+            for col, value in banks:
+                if "#" not in value:
+                    found.setdefault("United States", (col, f"{value} (US bank in the IBM data)"))
+                    break
+        for col in ("Payment Currency", "Receiving Currency"):
+            if col in df.columns:
+                for value in df[col].dropna().unique():
+                    if name := CURRENCY_COUNTRY.get(str(value)):
+                        found.setdefault(name, (col, str(value)))
+        for key, value in self.case_facts.items():
+            for name in filter(None, [canonical_country(value)]
+                               + [m[0] for m in country_mentions(value)]):
+                found.setdefault(name, (key, value))
+        texts = [f"{f.get('title', '')} {f.get('evidence', '')}" if isinstance(f, dict)
+                 else f"{getattr(f, 'title', '')} {getattr(f, 'evidence', '')}"
+                 for f in red_flags or []]
+        texts += list((detection or {}).get("evidence", []))
+        for text in texts:
+            for name, _, _ in country_mentions(str(text)):
+                found.setdefault(name, ("Rule evidence", name))
+        return found
 
     # ── amounts ──
     def _add(self, value, ccy, field_name, match_type):
@@ -946,12 +997,27 @@ def check_sentence_facts(
                     seen.add(name)
                     refs.append(FieldReference(col, name, "entity_name"))
 
-    # 5. Analyst-provided case facts quoted as text (name, occupation, address…)
+    # 5. Countries: named jurisdictions must appear somewhere in the case data
+    #    ("ruling out Iran", "no transfers to Mexico" name a country without claiming it).
+    for name, span, raw in country_mentions(sentence):
+        if _RULED_OUT_BEFORE.search(sentence[:span[0]]):
+            continue
+        if name in index.countries:
+            field_name, value = index.countries[name]
+            refs.append(FieldReference(field_name, value, "country"))
+        else:
+            known = ", ".join(sorted(index.countries)) or "none"
+            unverified.append(FieldReference(
+                "Country", raw, "unverified",
+                note=f"no transaction, bank, currency or case fact involves {name}; "
+                     f"countries in the case data: {known}"))
+
+    # 6. Analyst-provided case facts quoted as text (name, occupation, address…)
     for key, value in index.case_facts.items():
         if len(value) >= 4 and not re.fullmatch(r"[\d,.\-]+", value) and _word_in(value.lower(), lower):
             refs.append(FieldReference(key, value, "case_fact"))
 
-    # 6. Counts ("10 transactions", "11 accounts") — matched, never flagged:
+    # 7. Counts ("10 transactions", "11 accounts") — matched, never flagged:
     #    subset counts ("7 cash deposits") are legitimate.
     scopes = [index.flagged] + ([df] if len(df) != len(index.flagged) else [])
     for count_val, count_type in COUNT_PATTERN.findall(sentence):

@@ -128,3 +128,49 @@ def test_conclusion_versus_decision(text, decision_no_sar, expected):
 ])
 def test_named_typology(sentence, pattern, expected):
     assert at.named_typology(sentence, pattern) == expected
+
+
+# ── Countries named in the narrative ─────────────────────────────────────────
+
+def _country_case(banks, ccy="US Dollar", countries=("", "")):
+    import pandas as pd
+    import case_input as ci
+    rows = [{"Timestamp": f"2022/09/0{i + 1} 10:00", "From_Account": f"A{i}", "To_Account": "HUB1",
+             "From_Bank_Name": b, "To_Bank_Name": banks[0], "From_Entity_Name": "", "To_Entity_Name": "",
+             "Amount Paid": 100.0 + i, "Payment Currency": ccy, "Amount Received": 100.0 + i,
+             "Receiving Currency": ccy, "Payment Format": "ACH", "Flagged": True, "Txn_ID": f"T{i}",
+             "From_Country": countries[0], "To_Country": countries[1]}
+            for i, b in enumerate(banks)]
+    return ci.normalise_frame(pd.DataFrame(rows))
+
+
+def _countries(df, sentence):
+    refs, unverified = at.check_sentence_facts(sentence, df, None, at.FactIndex(df))
+    return ([r.field_value for r in refs if r.match_type == "country"],
+            [(u.field_value, u.note) for u in unverified if u.field_name == "Country"])
+
+
+def test_country_not_in_case_is_unverified():
+    # Case 012 edit: China -> India, where the banks are China/Germany/Finland/France + a US bank
+    df = _country_case(["Germany Bank #65", "China Bank #6", "Finland Bank #0", "France Bank #51",
+                        "National Bank of Laramie"])
+    ok, bad = _countries(df, "Activity spans the United States, Germany, India, Finland, and France.")
+    assert [b for b, _ in bad] == ["India"] and "China" in bad[0][1]
+    assert len(ok) == 4
+    ok, bad = _countries(df, "Activity spans the United States, Germany, China, Finland, and France.")
+    assert bad == [] and len(ok) == 5
+
+
+def test_country_sources():
+    # ISO codes in the country columns, a single-country currency, a ruled-out mention
+    df = _country_case(["Harbor Bank"], ccy="Rupee", countries=("AE", "GB"))
+    ok, bad = _countries(df, "Funds moved from the UAE to the United Kingdom and India.")
+    assert bad == [] and len(ok) == 3
+    assert _countries(df, "No transfers involved Iran.") == ([], [])
+
+
+def test_unnumbered_bank_is_american_only_in_ibm_style_data():
+    real_names = _country_case(["Harbor Community Bank"], ccy="Euro")
+    assert _countries(real_names, "Funds came from the United States.")[1]
+    ibm = _country_case(["Germany Bank #65", "National Bank of the East"], ccy="Euro")
+    assert _countries(ibm, "Funds came from the United States.")[1] == []
