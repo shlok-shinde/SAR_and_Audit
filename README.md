@@ -8,6 +8,25 @@ So this project treats the audit trail as the product, not a log file. Nothing l
 
 ---
 
+## Demo
+
+[![Demo: upload a bank export, add the case details, let the rules find the typology and red flags, draft locally, then edit a figure and watch the audit catch it](assets/demo.gif)](assets/demo.mp4)
+
+*The preview above plays at 1.6× speed; [watch the full video (MP4, 1:39)](assets/demo.mp4). The model's drafting time (about a minute) is sped up; everything else is real time.*
+
+It shows one case end to end:
+1. Upload a bank export.
+2. Add the customer profile, alert and investigation.
+3. The rules detect a gather-scatter pattern and a structuring red flag, and draw the funds flow.
+4. The local model drafts the narrative.
+5. Click a sentence to see its evidence.
+6. Change $67,500.00 to $87,500.00: the sentence turns *Unverified*, and the other sentence stating that amount is flagged for review.
+7. The decision and export panels.
+
+The red underline on "nine cash deposits" is real too: the data has seven, and the fact-check caught the model's slip during the recording.
+
+---
+
 ## What it does
 
 An analyst brings a case — a transaction export, the customer's KYC profile, the alert that triggered the review, their investigation findings and any prior SARs — or starts from a labelled sample out of the IBM AML dataset. Then:
@@ -157,6 +176,8 @@ src/          pipeline and app (see the module table above)
 tests/        146 pytest tests (incl. one regression guard per edge-case defect), fixtures for every upload format
 narratives/   16 hand-written gold-standard SAR narratives (the benchmark)
 generated/    model drafts for the 13 evaluation cases
+assets/       the demo video (MP4) and its README preview (GIF)
+scripts/      record_demo.py: re-records the demo headlessly (Playwright + ffmpeg, no manual steps)
 sources/      where to get the regulatory PDFs (FinCEN, FATF, FFIEC, APG, GARG-AML) + the pattern-to-typology mapping embedded with them
 ```
 
