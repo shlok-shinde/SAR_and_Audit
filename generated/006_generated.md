@@ -8,32 +8,32 @@
 
 ### Who (Subject Identification)
 
-This activity involves five accounts: 8049DD1C0, 80BB54BC0, 801F694E0, 8004257C0, and 8056BC280. These accounts are held by various corporate and sole proprietorship entities, and no prior SAR filings are on record for these entities.
+This activity involves five unique accounts and five distinct financial institutions: 8049DD1C0 (China Bank #14), 80BB54BC0 (Bank of Laramie), 801F694E0 (Sappo Bancorp), 8004257C0 (First Bank of Springfield), and 8056BC280 (India Bank #39). These accounts are associated with various corporate and sole proprietorship entities across different jurisdictions.
 
 ### What (Suspicious Activity)
 
-Between September 7 and September 10, 2022, funds moved through a sequence of five related accounts via ACH transfers, involving cross-currency transactions between US Dollars and Indian Rupees. The activity involved both inbound and outbound transfers, with funds being rapidly moved and converted across different financial institutions.
+Between September 7 and September 10, 2022, funds were moved through a five-hop cycle involving cross-currency transfers between US Dollars and Indian Rupees, demonstrating a pattern of layering and fund fragmentation. The activity included four distinct ACH transfers and one Bitcoin-linked transaction across the five accounts.
 
 ### When (Timeframe)
 
-The entire sequence of transactions occurred within a three-day window, spanning from September 7, 2022, 18:08 to September 10, 2022, 01:24.
+The entire sequence of transactions occurred within a 48-hour window, spanning from September 7, 2022, 18:08 to September 10, 2022, 01:24.
 
 ### Where (Location)
 
-The funds moved across five distinct financial institutions, including China Bank #14, Bank of Laramie, Sappo Bancorp, First Bank of Springfield, and India Bank #39, involving transactions across multiple jurisdictions.
+The funds were routed across five financial institutions located in different jurisdictions, including China Bank #14, Bank of Laramie, Sappo Bancorp, First Bank of Springfield, and India Bank #39.
 
 ### Why Suspicious
 
-The rapid, sequential movement of funds across five institutions over three days, coupled with immediate cross-currency conversions, is inconsistent with routine business operations for the entities involved. The pattern observed matches the CYCLE typology, which involves collecting funds from multiple accounts and dispersing them to various destinations, suggesting an attempt to obscure the origin and destination of the funds. The high percentage transfers, such as 100% or 98% transfers in a single day, and the flow of funds between accounts that are not directly linked by a single transaction, suggest layering activity designed to fragment traceability. This pattern is consistent with the mechanism described in FATF Professional Money Laundering (2018), Box 6, adapted to this case's mixed bank-transfer structure.
+The rapid, sequential movement of funds across these five institutions, involving multiple cross-currency conversions between US Dollars and Indian Rupees, is inconsistent with the typical business operations of the registered entities. The activity exhibits characteristics of layering, where funds are fragmented across multiple accounts and jurisdictions, which aligns with indicators of Trade-Based Money Laundering (TBM) schemes involving movement between different countries and financial institutions (Source 1). This pattern is consistent with the pattern of collecting funds from multiple accounts and dispersing them to many destinations, as noted in the GARG-AML paper (Source 4).
 
 ### How (Method / Mechanism)
 
-The activity involved five sequential ACH transfers between the five identified accounts. The flow began with an ACH transfer of $460.62 USD from 8049DD1C0 to 80BB54BC0, followed by a transfer of $485.30 USD from 80BB54BC0 to 801F694E0, and subsequent transfers involving Indian Rupees between 801F694E0, 8004257C0, and 8056BC280, demonstrating a flow that involved both cross-currency movement and internal transfers within the sequence.
+The funds moved sequentially through a five-hop cycle: an initial transfer of $460.62 USD from 8049DD1C0 to 80BB54BC0, followed by a subsequent transfer of $485.30 USD between 80BB54BC0 and 801F694E0, and further transfers involving the conversion of funds between US Dollars and Indian Rupees across the chain.
 
 ### Supporting Pattern
 
-Pattern: CYCLE (5 hops). Structural grounding: FATF Professional Money Laundering (2018), Box 6 ("complex chain of e-wallets"), adapted to this case's mixed bank-transfer and cross-currency structure. Per Trade_Based_ML_APGReport (2012), which highlights the movement of funds across multiple locations and institutions.
+Pattern: CYCLE (5 hops). Structural grounding: FATF Professional Money Laundering (2018), Box 6, adapted to describe the sequential flow across bank accounts and cross-currency movements. This pattern reflects the layering mechanism described in the TBM typology, where funds are moved between jurisdictions and institutions to obscure the origin and destination of the money.
 
 ### Quantitative Summary
 
-5 transactions total, involving $1,431.22 USD and 71,319.53 INR across the sequence; 5 unique accounts and 5 unique financial institutions; activity spanned a 3-day period (September 7–10, 2022).
+5 transactions total across 5 unique accounts and 5 unique banks, involving US Dollars and Indian Rupees. The total sum of all transfer legs, paid and received, amounts to $1,431.22 and 71,319.53 Indian Rupees over the 48-hour period.

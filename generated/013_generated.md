@@ -8,32 +8,32 @@
 
 ### Who (Subject Identification)
 
-The activity involves 15 transactions spanning 30 unique accounts across 29 distinct financial institutions. The accounts involved include various entities such as Partnerships, Corporations, and Sole Proprietorships, including accounts like 809DDA830 (Canada Bank #33) and 80B5D7AC0 (France Bank #409), acting as both senders and receivers of funds.
+This activity involves 15 distinct transactions across 30 unique accounts and 29 financial institutions, involving multiple entities identified as Partnerships, Corporations, and Sole Proprietorships, including accounts such as 809DDA830 (Canada Bank #33), 80B5D7AC0 (France Bank #409), and 800BD1990 (National Bank of the East).
 
 ### What (Suspicious Activity)
 
-Between September 5 and September 6, 2022, these accounts initiated 15 outbound ACH transfers involving four different currencies: Euro, US Dollar, Yen, and Yuan. The total amount paid and received across these transactions was $46,131.55 USD, €46,131.55 EUR, 2,459,110.88 JPY, and 17,048.15 CNY.
+Between September 5 and September 6, 2022, 15 ACH transfers were executed involving four different currencies—Euro, US Dollar, Yen, and Yuan—moving funds between these accounts across various financial institutions.
 
 ### When (Timeframe)
 
-All 15 transfers occurred within a 48-hour window, from 2022/09/05 08:13 to 2022/09/06 18:45.
+All 15 transfers occurred within a 10-hour and 32-minute window, from 2022/09/05 08:13 to 2022/09/06 18:45.
 
 ### Where (Location)
 
-The funds were dispersed across 29 financial institutions spanning multiple international jurisdictions, including banks in Canada, France, Germany, Italy, Japan, and China.
+The funds were dispersed across 29 financial institutions spanning multiple countries, including Germany, France, Japan, the United States, Canada, Italy, and China, demonstrating a broad, multi-jurisdictional distribution for a single set of transactions.
 
 ### Why Suspicious
 
-The movement of funds across numerous international accounts and institutions, involving multiple currencies, is inconsistent with the apparent legitimate business activities of the registered entities. This activity is suspicious because it aligns with the Bipartite typology, which suggests transactions revealing links between entities with common ownership or management, requiring collusion at both ends of the transaction chain. Alternative explanations, such as complex international trade settlements, are not supported by the nature of the transfers observed.
+The activity exhibits a Bipartite pattern, involving transactions between accounts linked to different corporate or business entities, which suggests an attempt to obscure the true origin and destination of funds through related-party structures. The complexity of the flow, involving cross-currency transfers and numerous intermediary accounts, is inconsistent with routine commercial activity for the registered entities. Alternative explanations for this complexity could include legitimate international trade or investment flows, but the pattern aligns with the typology of related-party transactions requiring collusion at both ends.
 
 ### How (Method / Mechanism)
 
-The funds were moved through sequential ACH transfers between the identified accounts, involving cross-currency payments, to disperse the total sum across various international banking institutions.
+The funds were moved via ACH transfers between the identified accounts, involving payments and receipts in Euro, US Dollar, Yen, and Yuan, routed through a network of 29 distinct financial institutions.
 
 ### Supporting Pattern
 
-Pattern: BIPARTITE (nan). Structural grounding: FATF Professional Money Laundering (2018), Box 6, which addresses complex chains of transactions revealing links between entities with common ownership or management.
+Pattern: BIPARTITE (nan). Structural grounding: FATF Professional Money Laundering (2018), Box 6, adapted to describe related-party transactions between entities, requiring collusion.
 
 ### Quantitative Summary
 
-15 transactions, totaling $46,131.55 USD, €46,131.55 EUR, 2,459,110.88 JPY, and 17,048.15 CNY, across 30 unique accounts and 29 unique banks, executed via ACH format between 2022/09/05 and 2022/09/06.
+15 transactions total across 30 unique accounts and 29 unique banks, involving Euro, US Dollar, Yen, and Yuan, executed via ACH between 2022/09/05 and 2022/09/06.

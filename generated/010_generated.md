@@ -8,32 +8,32 @@
 
 ### Who (Subject Identification)
 
-The activity involves multiple accounts, including 800AEAC00, 8001E6840, 8000EE420, 8001BA930, 80027A2B0, 8001576B0, 8009FD120, 8006A4A30, 8002DA960, 8003AA6D0, 8007F79F0, 8005A64B0, and 8005C1970, which are associated with various entities including Partnerships and Sole Proprietorships.
+The activity involves multiple accounts, including Account 800AEAC00, held by Partnership #27410 at France Bank #75, which initiated the transfers. The funds were dispersed to 11 distinct recipients, including Account 8000EE420, held by Corporation #20093 at Germany Bank #65, and other accounts across 12 financial institutions.
 
 ### What (Suspicious Activity)
 
-Between September 8 and September 12, 2022, twenty-two ACH transfers totaling 737,324.99 Euro and $234,486.65 moved funds across 12 financial institutions, involving 13 unique accounts. The activity involved a complex flow where Account 800AEAC00 sent funds to 11 distinct recipients, and Account 8000EE420 received funds from 11 distinct senders.
+Between September 8 and September 12, 2022, the activity involved 22 ACH transfers, demonstrating a Scatter-Gather pattern where funds were sent from Account 800AEAC00 to 11 distinct recipients, resulting in a total of $234,486.65 in US Dollars and 283,702.93 Euro.
 
 ### When (Timeframe)
 
-The transactions occurred over a four-day period, spanning from September 8, 2022, 08:02 to September 12, 2022, 03:44, demonstrating rapid movement of funds.
+The transactions occurred over a 4-day period, spanning from 2022/09/08 08:02 to 2022/09/12 03:44.
 
 ### Where (Location)
 
-The funds were dispersed across multiple jurisdictions and institutions, including France Bank #75, Arbor Savings Bank, Germany Bank #65, Portugal Bank #43, and various other financial institutions across Europe and the United States.
+The funds originated from France Bank #75 and were dispersed across 11 distinct receiving institutions in various countries, including Germany Bank #65, Arbor Savings Bank, Portugal Bank #43, China Bank #6, and Finland Bank #0.
 
 ### Why Suspicious
 
-The activity exhibits a Scatter-Gather pattern, where funds were collected from multiple sources and dispersed to many destinations, consistent with a money mule methodology. The rapid movement of funds through multiple accounts and institutions, coupled with currency conversions (US Dollar to Euro) within the flow, is inconsistent with the registered profiles of the account holders. This pattern aligns with the typology of scatter-gather, where money is sent via multiple mule accounts to obscure the origin and destination of the funds (see GARG-AML paper(for scatter-gather).pdf).
+The rapid dispersal of funds from a single originating account across multiple international banks within a short timeframe is inconsistent with routine commercial activity. The activity exhibits clear layering behavior, utilizing multiple intermediary accounts and cross-currency conversions (US Dollar to Euro) to obscure the origin and destination of the funds. This pattern aligns with the Scatter-Gather typology, where funds are sent from one source to many destinations via multiple mule accounts, suggesting an attempt to fragment the money flow and evade detection thresholds (see GARG-AML paper(for scatter-gather).pdf). Alternative explanations for this activity could include complex international business settlements or multi-party investment transfers.
 
 ### How (Method / Mechanism)
 
-The funds were moved through a sequence where Account 800AEAC00 initiated 11 transfers to various recipients, while Account 8000EE420 received 11 inbound transfers from these same recipients, utilizing sequential ACH transfers across different banks to fragment traceability. Currency conversion occurred within the flow, for example, between 8001BA930 and 8000EE420, suggesting layering to obscure the true movement of fiat currency.
+Account 800AEAC00 executed 11 separate ACH transfers, sending a total of $234,486.65 in US Dollars and 283,702.93 Euro to 11 distinct recipients. These transfers involved multiple currency conversions within the flow, as evidenced by transfers between US Dollar and Euro accounts, routed through various intermediary accounts.
 
 ### Supporting Pattern
 
-Pattern: SCATTER-GATHER (nan). Structural grounding: GARG-AML against Smurfing (Deprez et al. 2025), which describes money being sent from one source to its destination via multiple money mules (one-to-many-to-one). This pattern is supported by the observation of funds being spread across 12 institutions and involving multiple cross-currency transfers.
+Pattern: SCATTER-GATHER (nan). Structural grounding: GARG-AML paper(for scatter-gather).pdf, which defines the pattern as money being sent from one source to its destination via multiple money mules. The activity involved 13 unique accounts across 12 unique banks, demonstrating the fragmentation of funds across multiple jurisdictions.
 
 ### Quantitative Summary
 
-22 transactions, $737,324.99 Euro and $234,486.65 total, involving 13 unique accounts across 12 unique banks, executed via ACH format between September 8 and September 12, 2022.
+22 transactions total, $234,486.65 in US Dollars and 283,702.93 Euro, 13 unique accounts across 12 unique banks, ACH format exclusively, September 8–12, 2022 (103.5-hour window).

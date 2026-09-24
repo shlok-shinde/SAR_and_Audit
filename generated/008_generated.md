@@ -8,32 +8,32 @@
 
 ### Who (Subject Identification)
 
-The subject account, 80EB1E930, held by Switzerland Bank #51, is the central hub for all observed suspicious activity. This account is involved in receiving funds in Swiss Franc and subsequently dispersing them in multiple foreign currencies.
+The subject account, 80EB1E930, held by Switzerland Bank #51, served as the central hub for all inbound and outbound transactions in this activity. The account is registered as a corporation with no prior SAR filings on record.
 
 ### What (Suspicious Activity)
 
-Between September 3 and September 10, 2022, account 80EB1E930 received 10 ACH transfers totaling 96,258.33 Swiss Franc and subsequently sent 11 outbound transfers totaling 38,646.03 Euro, 7,433.54 UK Pound, $59,605.58 US Dollar, and 1,535,493.32 Yen to 11 distinct recipients across various financial institutions.
+Between September 3 and September 10, 2022, account 80EB1E930 received 10 inbound ACH transfers totaling 96,258.33 Swiss Franc, and subsequently sent 11 outbound transfers totaling 38,646.03 Euro, 7,433.54 UK Pound, $59,605.58 US Dollar, and 1,535,493.32 Yen to 11 distinct recipients.
 
 ### When (Timeframe)
 
-The activity spanned a seven-day period, from 2022/09/03 05:28 to 2022/09/10 02:09.
+The activity spanned a 7-day period, from 2022/09/03 05:28 to 2022/09/10 02:09, involving 10 inbound transfers and 11 outbound transfers.
 
 ### Where (Location)
 
-Funds originated from 10 distinct senders across various countries and were dispersed to 11 distinct recipients across 21 financial institutions, including Switzerland, Spain, India, Germany, Russia, Finland, Japan, and the United States.
+Funds originated from 10 distinct senders across various financial institutions, including Spain Bank #64, India Bank #76, and China Bank #340, and were dispersed to 11 distinct recipients across 21 financial institutions in countries including Switzerland, Germany, Finland, Japan, and the United States.
 
 ### Why Suspicious
 
-The rapid movement of funds through account 80EB1E930, involving multiple cross-currency conversions and dispersal across numerous international banks, is inconsistent with the account holder's profile and expected activity. This pattern is consistent with the gather-scatter money laundering method, where funds are collected from multiple accounts and dispersed to many destinations to fragment traceability. Alternative explanations for this activity could include legitimate international business transactions or complex investment flows.
+The rapid movement of funds through the account, combined with the complex cross-currency conversions and dispersal across numerous international institutions, is inconsistent with the expected activity for a single corporate account. This pattern aligns with the GATHER-SCATTER typology, which describes collecting funds from multiple accounts and dispersing them to many destinations, suggesting an intent to fragment traceability and obscure the origin of the funds. This activity is not necessarily indicative of illegal activity, as legitimate international trade or investment flows can also involve complex multi-currency transfers.
 
 ### How (Method / Mechanism)
 
-Account 80EB1E930 received 10 inbound ACH transfers in Swiss Franc and then executed 11 outbound ACH transfers in various foreign currencies, routing the funds sequentially to 11 distinct receiving accounts across 21 financial institutions.
+The subject account received 10 inbound ACH transfers in Swiss Franc and disbursed 11 outbound ACH transfers in Euro, UK Pound, US Dollar, and Yen. The mechanism involved sequential transfers where funds were aggregated into the account and then distributed across multiple international bank accounts, including transfers between the account and other financial institutions.
 
 ### Supporting Pattern
 
-Pattern: GATHER-SCATTER (10-degree Fan-In/Out). Structural grounding: FATF Professional Money Laundering (2018), Box 6, adapted to describe the flow of funds through multiple accounts and institutions to fragment traceability. Per `typology_mapping.md`.
+Pattern: GATHER-SCATTER (10-degree Fan-In/11-degree Fan-Out). Structural grounding: FATF Professional Money Laundering (2018), Box 6, adapted to describe the collection and dispersal of funds across multiple accounts and institutions.
 
 ### Quantitative Summary
 
-10 inbound transfers totaling 96,258.33 Swiss Franc and 11 outbound transfers totaling 38,646.03 Euro, 7,433.54 UK Pound, $59,605.58, and 1,535,493.32 Yen across 11 recipients, spanning 21 unique institutions and 22 unique accounts over a seven-day period.
+10 inbound transfers and 11 outbound transfers totaling 96,258.33 Swiss Franc received and 38,646.03 Euro, 7,433.54 UK Pound, $59,605.58 US Dollar, and 1,535,493.32 Yen sent across 21 unique financial institutions over a 7-day window.

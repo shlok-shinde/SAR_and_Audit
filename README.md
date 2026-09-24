@@ -64,11 +64,11 @@ Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | Measure | Result |
 |---|---|
 | FFIEC structural completeness | 13/13 evaluation cases carry all 8 sections |
-| Sentence sourcing | 41 of 171 sentences fully sourced, up from 14 under the pre-intake prompt (same audit code) |
+| Sentence sourcing | 40 of 178 sentences fully sourced (up from 14 under the pre-intake prompt); 3 unverified |
 | Typology detection without the dataset label | **98.1%** (253/258) on attempts with ≥3 account links; 81.1% across all 370, where 112 attempts have ≤2 links and are inherently ambiguous |
 | Negative controls | 0 of 41 RANDOM attempts raise a high-severity red flag, so "no SAR" is reached without peeking at labels |
 | Retrieval | 14/16 label queries, 12/16 description queries — hybrid retrieval covers the gap |
-| Fact-check | Caught 3 invented figures in live runs; on the 13-case re-run it flagged 17 more, 15 of which are real amounts written with a `$` in front of a non-dollar currency |
+| Fact-check | Unverified figures in the 13 evaluation drafts fell from 30 to 3 after the edge-case fixes (same checker on both). The 3 left are real model errors, e.g. an invented "Bitcoin-linked transaction" |
 | Edge cases | 20 defects found by an adversarial end-to-end pass and fixed, each with a regression test — see [docs/EDGE_CASES.md](docs/EDGE_CASES.md) |
 | Tests | 121 pytest tests |
 | Generation | 29–37s per narrative on a local 5B model |
