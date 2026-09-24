@@ -30,7 +30,7 @@ import streamlit as st
 
 from audit_trail import (
     TABLE_SEPARATOR_PATTERN, AuditRecord, diff_provenance, grounding_status, is_table_row,
-    table_cells,
+    named_typology, table_cells,
 )
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
@@ -218,7 +218,9 @@ def audit_payload(audit: AuditRecord | None, baseline: AuditRecord | None = None
                            for u in getattr(sent, "unverified_values", [])],
             "review": getattr(sent, "needs_review", ""),
             "notes": notes.get(sent.sentence_index, []),
-            "typology": sent.typology_match or "",
+            # Recomputed, not read from the record: records written before
+            # 2026-09-24 carry labels from a loose keyword map.
+            "typology": named_typology(sent.sentence_text, audit.pattern_type) or "",
             "confidence": sent.confidence_note,
             "change": changes.get(sent.sentence_index, {}).get("kind", ""),
             "was": changes.get(sent.sentence_index, {}).get("was", ""),

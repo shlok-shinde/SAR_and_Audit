@@ -1215,22 +1215,6 @@ def attribute_chunks_to_sentences(
                 if chunk.chunk_id not in sent.chunk_attributions:
                     sent.chunk_attributions.append(chunk.chunk_id)
 
-        # Also check for typology-specific keywords
-        typology_keywords = {
-            "fan-out": ["fan-out", "dispersal", "structuring", "smurfing"],
-            "fan-in": ["fan-in", "aggregation", "convergence", "funnel"],
-            "cycle": ["cycle", "circular", "u-turn", "round-trip", "layering"],
-            "gather-scatter": ["gather-scatter", "funnel", "consolidation", "redistribution"],
-            "scatter-gather": ["scatter-gather", "intermediary", "mule", "smurfing"],
-            "stack": ["stack", "parallel", "chain", "sequential", "hops"],
-            "bipartite": ["bipartite", "related-party", "disjoint", "coordinated"],
-            "random": ["random", "unstructured", "no clear", "no typology"],
-        }
-        sent_lower = sent.sentence_text.lower()
-        for pattern, keywords in typology_keywords.items():
-            if any(kw in sent_lower for kw in keywords):
-                sent.typology_match = pattern.upper()
-                break
 
 
 # ── Build Complete Audit Record ──────────────────────────────────────────────
@@ -1275,6 +1259,7 @@ def build_audit_record(
             sent.needs_review = needs_review(sent.sentence_text, sent.field_references)
         sent.needs_review = sent.needs_review or typology_mismatch(sent.sentence_text,
                                                                    pattern_type)
+        sent.typology_match = named_typology(sent.sentence_text, pattern_type)
 
     # Analysis: retrieved regulatory context and rule-based red flags
     if retrieval_metadata and retrieval_metadata.chunks_returned:
@@ -1449,6 +1434,30 @@ _RULED_OUT_AFTER = re.compile(
     r"detected|indicated))|does not apply)", re.IGNORECASE)
 
 
+def _named_typologies(sentence: str) -> list[str]:
+    """Typologies the sentence names as present (ruled-out mentions are skipped)."""
+    named = []
+    for name, rx in TYPOLOGY_NAMES.items():
+        for m in rx.finditer(sentence):
+            if not (_RULED_OUT_BEFORE.search(sentence[:m.start()])
+                    or _RULED_OUT_AFTER.match(sentence[m.end():])):
+                named.append(name)
+                break
+    return named
+
+
+def named_typology(sentence: str, pattern: str | None = None) -> str | None:
+    """The typology a sentence names, for the audit card's Typology line.
+
+    Only explicit names count: an earlier keyword map tagged "structuring" as
+    FAN-OUT, which labelled sentences in a FAN-IN case with the wrong typology.
+    The case's own pattern wins when the sentence names several.
+    """
+    named = _named_typologies(sentence)
+    case = (pattern or "").upper()
+    return case if case in named else (named[0] if named else None)
+
+
 def typology_mismatch(sentence: str, pattern: str | None) -> str:
     """Why a sentence naming a different typology from the case's needs review ('' if none).
 
@@ -1459,17 +1468,13 @@ def typology_mismatch(sentence: str, pattern: str | None) -> str:
     if not case:
         return ""
     allowed = {case} | TYPOLOGY_PHASES.get(case, set())
-    for name, rx in TYPOLOGY_NAMES.items():
+    for name in _named_typologies(sentence):
         if name in allowed:
             continue
-        for m in rx.finditer(sentence):
-            if (_RULED_OUT_BEFORE.search(sentence[:m.start()])
-                    or _RULED_OUT_AFTER.match(sentence[m.end():])):
-                continue
-            if case in ("NONE", "RANDOM"):
-                return (f"Names a {name} pattern, but no typology was detected in this case "
-                        "— check it")
-            return f"Names a {name} pattern, but this case is {case} — check it"
+        if case in ("NONE", "RANDOM"):
+            return (f"Names a {name} pattern, but no typology was detected in this case "
+                    "— check it")
+        return f"Names a {name} pattern, but this case is {case} — check it"
     return ""
 
 
@@ -1651,8 +1656,8 @@ def generate_provenance_report(audit_record: AuditRecord) -> str:
                 f"{u.field_value}" + (f" ({u.note})" if u.note else "")
                 for u in sent.unverified_values))
 
-        if sent.typology_match:
-            lines.append(f"  - **Typology:** {sent.typology_match}")
+        if typology := named_typology(sent.sentence_text, audit_record.pattern_type):
+            lines.append(f"  - **Typology:** {typology}")
 
         lines.append(f"  - **Confidence:** {sent.confidence_note}")
         lines.append("")

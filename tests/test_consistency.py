@@ -114,3 +114,17 @@ SUSPICIOUS = "The activity is consistent with structuring."
 def test_conclusion_versus_decision(text, decision_no_sar, expected):
     result = g.conclusion_mismatch(text, decision_no_sar)
     assert (expected in result) if expected else result == ""
+
+
+# ── The card's Typology line ─────────────────────────────────────────────────
+
+@pytest.mark.parametrize("sentence,pattern,expected", [
+    # "structuring" used to be labelled FAN-OUT, in a FAN-IN case (stored case 003, S11)
+    ("Structural grounding: FinCEN Case Example, July 2014, Case 7 "
+     "(structuring/aggregation into a single account).", "FAN-IN", None),
+    ("Pattern: GATHER-SCATTER (13-degree Fan-In).", "GATHER-SCATTER", "GATHER-SCATTER"),
+    ("The chain shows no return-to-origin at any point, ruling out CYCLE.", "RANDOM", None),
+    ("Funds were aggregated in a fan-in.", "FAN-IN", "FAN-IN"),
+])
+def test_named_typology(sentence, pattern, expected):
+    assert at.named_typology(sentence, pattern) == expected
