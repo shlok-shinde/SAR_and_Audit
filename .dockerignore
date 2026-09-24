@@ -1,0 +1,11 @@
+# Send the image build only what the Dockerfile copies. Without this, the build
+# context is the whole folder: the 6.8 GB .venv, the IBM dataset, chroma_db and
+# the local notes in docs/, all copied to the Docker daemon before building.
+*
+!requirements.txt
+!src/
+!narratives/
+!sources/TYPOLOGY_MAPPING.md
+!.streamlit/
+**/__pycache__
+.streamlit/secrets.toml
