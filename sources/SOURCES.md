@@ -18,6 +18,6 @@ Download them into this directory under the exact filenames below. `fatf-gafi.or
 | `Trade_Based_ML_APGReport(for bipartite).pdf` | *APG Typology Report on Trade Based Money Laundering* (20 July 2012) | Asia/Pacific Group on Money Laundering, hosted by FATF | [fatf-gafi.org](https://www.fatf-gafi.org/content/dam/fatf-gafi/reports/Trade_Based_ML_APGReport.pdf.coredownload.pdf) |
 | `GARG-AML paper(for scatter-gather).pdf` | Deprez, Baesens, Verdonck, Verbeke — *GARG-AML against Smurfing: A Scalable and Interpretable Graph-Based Framework for Anti-Money Laundering* | Preprint (arXiv) | [arxiv.org/abs/2506.04292](https://arxiv.org/abs/2506.04292) |
 
-The parenthetical in each filename records which IBM laundering pattern the document was sourced to ground — see [docs/TYPOLOGY_MAPPING.md](../docs/TYPOLOGY_MAPPING.md) for the full mapping.
+The parenthetical in each filename records which IBM laundering pattern the document was sourced to ground — see [TYPOLOGY_MAPPING.md](TYPOLOGY_MAPPING.md) for the full mapping.
 
-`docs/TYPOLOGY_MAPPING.md` is embedded alongside these PDFs, so the retrieval layer also carries the project's own pattern-to-typology mapping.
+`TYPOLOGY_MAPPING.md` (in this folder, committed) is embedded alongside these PDFs, so the retrieval layer also carries the project's own pattern-to-typology mapping.

@@ -56,8 +56,6 @@ flowchart LR
 | `src/export.py` | FinCEN plain-text narrative, case file HTML/Markdown, filing deadlines |
 | `src/db.py` | `sar_cases` and `case_events` in PostgreSQL |
 
-Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For how data moves between files, and the purpose of every file in the repository, see [docs/DATA_FLOW.md](docs/DATA_FLOW.md).
-
 ---
 
 ## Results
@@ -70,11 +68,11 @@ Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For how data moves 
 | Negative controls | 0 of 41 RANDOM attempts raise a high-severity red flag, so "no SAR" is reached without peeking at labels |
 | Retrieval | 14/16 label queries, 12/16 description queries — hybrid retrieval covers the gap |
 | Fact-check | Unverified figures in the 13 evaluation drafts fell from 30 to 3 after the edge-case fixes (same checker on both). The 3 left are real model errors, e.g. an invented "Bitcoin-linked transaction" |
-| Edge cases | 20 defects found by an adversarial end-to-end pass and fixed, each with a regression test — see [docs/EDGE_CASES.md](docs/EDGE_CASES.md) |
+| Edge cases | 20 defects found by an adversarial end-to-end pass and fixed, each with a regression test |
 | Tests | 146 pytest tests |
 | Generation | 29–37s per narrative on a local 5B model |
 
-Method and caveats: [docs/EVALUATION.md](docs/EVALUATION.md). The honest limitations are collected in [docs/INTERVIEW_PREP.md](docs/INTERVIEW_PREP.md) §6 — including the fact that the typology rules were designed against the same IBM data they are scored on.
+Caveats: the typology rules were designed against the same IBM data they are scored on, so 98.1% is an upper bound; "sourced" means a sentence cites real values, not that it is true; and claims with no figure or relationship in them ("controlled by a trafficking organization") can't be checked by rules.
 
 ---
 
@@ -156,11 +154,10 @@ Rebuilds the audit trails for the drafts already in `generated/` and loads them 
 
 ```
 src/          pipeline and app (see the module table above)
-tests/        121 pytest tests (incl. one regression guard per edge-case defect), fixtures for every upload format
+tests/        146 pytest tests (incl. one regression guard per edge-case defect), fixtures for every upload format
 narratives/   16 hand-written gold-standard SAR narratives (the benchmark)
 generated/    model drafts for the 13 evaluation cases
-sources/      regulatory PDFs: FinCEN, FATF, FFIEC, APG, GARG-AML
-docs/         architecture, evaluation, data dictionary, roadmap, decision log
+sources/      where to get the regulatory PDFs (FinCEN, FATF, FFIEC, APG, GARG-AML) + the pattern-to-typology mapping embedded with them
 ```
 
 The gold-standard narratives in `narratives/` are hand-written, deliberately. An AI-generated "gold standard" would make the benchmark circular.

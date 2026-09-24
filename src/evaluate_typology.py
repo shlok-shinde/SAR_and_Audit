@@ -107,6 +107,9 @@ def report(res: dict) -> str:
 
 
 def write_doc(text: str) -> None:
+    if not DOC.exists():   # docs/ is the maintainer's local notes, not part of the repo
+        print(f"\n{DOC} not found; report printed above only.")
+        return
     body = DOC.read_text(encoding="utf-8")
     block = f"{START}\n{text}\n{END}"
     if START in body:

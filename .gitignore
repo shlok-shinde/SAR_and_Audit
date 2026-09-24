@@ -62,3 +62,6 @@ scratch/
 
 # Regulatory source PDFs — third-party copyright; see sources/SOURCES.md for where to get them
 sources/*.pdf
+
+# Project notes, decision log and interview prep: the maintainer's local reference, not published
+docs/

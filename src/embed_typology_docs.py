@@ -3,7 +3,7 @@ embed_typology_docs.py — Extract, chunk, and embed typology documents into Chr
 
 Processes:
   - 7 PDF source documents from sources/
-  - TYPOLOGY_MAPPING.md from docs/
+  - TYPOLOGY_MAPPING.md from sources/ (the project's pattern-to-typology mapping)
 Chunks with LangChain's RecursiveCharacterTextSplitter, embeds with
 sentence-transformers/all-MiniLM-L6-v2, persists to ./chroma_db/.
 """
@@ -17,7 +17,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # ── Paths ────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SOURCES_DIR = PROJECT_ROOT / "sources"
-DOCS_DIR = PROJECT_ROOT / "docs"
 CHROMA_DIR = PROJECT_ROOT / "chroma_db"
 COLLECTION_NAME = "typology_docs"
 
@@ -187,7 +186,7 @@ def run_pipeline() -> None:
         all_pages.extend(pages)
 
     # Also load TYPOLOGY_MAPPING.md
-    mapping_path = DOCS_DIR / "TYPOLOGY_MAPPING.md"
+    mapping_path = SOURCES_DIR / "TYPOLOGY_MAPPING.md"
     if mapping_path.exists():
         md_pages = extract_markdown_text(mapping_path)
         print(f"  {mapping_path.name}: loaded as single document")

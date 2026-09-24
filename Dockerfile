@@ -23,7 +23,7 @@ RUN pip install -r requirements.txt
 # Application code and the assets it reads at runtime.
 COPY src/ ./src/
 COPY narratives/ ./narratives/
-COPY docs/TYPOLOGY_MAPPING.md ./docs/TYPOLOGY_MAPPING.md
+COPY sources/TYPOLOGY_MAPPING.md ./sources/TYPOLOGY_MAPPING.md
 COPY .streamlit/ ./.streamlit/
 
 # chroma_db/, data/, generated/ and audit_logs/ are bind-mounted by compose —
