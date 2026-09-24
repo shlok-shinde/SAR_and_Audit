@@ -54,6 +54,7 @@ from generate_narrative import (  # noqa: E402
     PATTERN_DESCRIPTIONS,
     PRIMARY_MODEL,
     NarrativeGenerationError,
+    draft_warnings,
     generate_with_audit,
     retrieve_by_queries,
 )
@@ -1334,14 +1335,24 @@ def _kv(rows: list[tuple[str, str]]) -> str:
         f"<dt>{html.escape(k)}</dt><dd>{html.escape(str(v))}</dd>" for k, v in rows) + "</dl>"
 
 
-def render_draft_warnings(audit: AuditRecord | None) -> None:
-    """Shortcomings the generator kept after its retry (missing expected sections,
-    no alternative explanation, prior SAR not cited)."""
-    warnings = (audit.generation_config.get("warnings") if audit and audit.generation_config
-                else None)
-    if warnings and not audit.model_used.endswith("human edit"):
+def render_draft_warnings(narrative: str) -> None:
+    """Shortcomings in the current text: missing sections, no alternative
+    explanation, prior SAR not cited. Re-checked on every edit, so the banner
+    clears only when the text is actually fixed."""
+    case = st.session_state.get("case_input")
+    # Generation rejects drafts missing a required section; an edit can still delete one.
+    sections = score_text(narrative)["sections"]
+    missing = [s for s in REQUIRED_SECTIONS if not sections[s]]
+    warnings = ([f"missing required sections: {', '.join(missing)}"] if missing else []) \
+        + draft_warnings(narrative, case.prior_sars if case else ())
+    if not warnings:
+        return
+    if narrative == st.session_state.get("baseline_narrative"):
         st.warning("The draft was kept despite: " + "; ".join(warnings)
                    + ". Fix these while editing.", icon=":material/rule:")
+    else:
+        st.warning("The edited draft still has: " + "; ".join(warnings) + ".",
+                   icon=":material/rule:")
 
 
 def render_case_evidence() -> None:
@@ -1442,7 +1453,7 @@ def main() -> None:
     render_case_header(db_ok)
     st.space("small")
     render_metrics(st.session_state["narrative"], st.session_state.get("audit"))
-    render_draft_warnings(st.session_state.get("audit"))
+    render_draft_warnings(st.session_state["narrative"])
     render_case_evidence()
     st.space("small")
 
