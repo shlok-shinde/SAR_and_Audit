@@ -15,7 +15,7 @@ An analyst brings a case — a transaction export, the customer's KYC profile, t
 1. **Deterministic rules run first.** A graph of the money flow is classified into a laundering typology (fan-out, cycle, gather-scatter, …) and scanned for 12 red flags — structuring, rapid pass-through, cross-border wires, FATF-listed jurisdictions, activity far above the customer's expected volume. Every finding carries its own evidence, and the analyst can override the typology.
 2. **Retrieval grounds the draft.** FinCEN advisories, FATF typology reports and the FFIEC examination manual are chunked into ChromaDB and queried by both the detected pattern and a description of the activity.
 3. **A local model writes the draft** in FFIEC format (who / what / when / where / why suspicious / how), with three hand-written gold-standard narratives as few-shot examples.
-4. **Every sentence is audited.** Which transaction fields it used, which retrieved passages it drew on, which rule finding it reflects — and a fact-check that flags **any amount, date, account or count that is not in the case data**, with the closest real value as a hint.
+4. **Every sentence is audited.** Which transaction fields it used, which retrieved passages it drew on, which rule finding it reflects — and a fact-check that flags **any amount, date, account, count or duration that is not in the case data** — and any amount attached to the wrong sender, receiver or payment method — with the real value as a hint. The audit pane labels sentences *Sourced / Partly sourced / Unsourced / Unverified*: "sourced" means a sentence cites values that exist, not that it is true.
 5. **The analyst decides.** Edit the draft (the audit rebuilds live, tracking what was changed, added or removed), record SAR or No SAR with a rationale, respect the 30-day filing deadline, and get a second person to approve it. Export the FinCEN narrative text, a printable case file, or the audit trail as JSON.
 
 ### Why the fact-check earns its place
@@ -64,12 +64,13 @@ Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | Measure | Result |
 |---|---|
 | FFIEC structural completeness | 13/13 evaluation cases carry all 8 sections |
-| Sentence grounding | 41 of 171 sentences fully grounded, up from 14 under the pre-intake prompt (same audit code) |
+| Sentence sourcing | 41 of 171 sentences fully sourced, up from 14 under the pre-intake prompt (same audit code) |
 | Typology detection without the dataset label | **98.1%** (253/258) on attempts with ≥3 account links; 81.1% across all 370, where 112 attempts have ≤2 links and are inherently ambiguous |
 | Negative controls | 0 of 41 RANDOM attempts raise a high-severity red flag, so "no SAR" is reached without peeking at labels |
 | Retrieval | 14/16 label queries, 12/16 description queries — hybrid retrieval covers the gap |
 | Fact-check | Caught 3 invented figures in live runs; on the 13-case re-run it flagged 17 more, 15 of which are real amounts written with a `$` in front of a non-dollar currency |
-| Tests | 54 pytest tests, plus 25 known defects pinned as strict `xfail` tests — see [docs/EDGE_CASES.md](docs/EDGE_CASES.md) |
+| Edge cases | 20 defects found by an adversarial end-to-end pass and fixed, each with a regression test — see [docs/EDGE_CASES.md](docs/EDGE_CASES.md) |
+| Tests | 121 pytest tests |
 | Generation | 29–37s per narrative on a local 5B model |
 
 Method and caveats: [docs/EVALUATION.md](docs/EVALUATION.md). The honest limitations are collected in [docs/INTERVIEW_PREP.md](docs/INTERVIEW_PREP.md) §6 — including the fact that the typology rules were designed against the same IBM data they are scored on.
@@ -154,7 +155,7 @@ Rebuilds the audit trails for the drafts already in `generated/` and loads them 
 
 ```
 src/          pipeline and app (see the module table above)
-tests/        54 pytest tests + 25 strict-xfail edge cases, fixtures for every upload format
+tests/        121 pytest tests (incl. one regression guard per edge-case defect), fixtures for every upload format
 narratives/   16 hand-written gold-standard SAR narratives (the benchmark)
 generated/    model drafts for the 13 evaluation cases
 sources/      regulatory PDFs: FinCEN, FATF, FFIEC, APG, GARG-AML
