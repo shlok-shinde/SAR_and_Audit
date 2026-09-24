@@ -407,11 +407,15 @@ def test_no_sar_regex_matches_conclusions_only():
 
 def test_models_are_local_and_reachable(monkeypatch):
     monkeypatch.setattr(g, "PRIMARY_MODEL", "gemma4:31b-cloud")
-    with pytest.raises(g.NarrativeGenerationError, match="local-first"):
+    with pytest.raises(g.ModelUnavailableError, match="local-first"):
         g.check_models()
     monkeypatch.setattr(g, "PRIMARY_MODEL", "gemma4:e2b")
     monkeypatch.setattr(g, "OLLAMA_URL", "http://127.0.0.1:9")
-    with pytest.raises(g.NarrativeGenerationError, match="not reachable"):
+    with pytest.raises(g.ModelUnavailableError, match="not reachable.*ollama serve"):
+        g.check_models()
+    # A remote URL (the app in a container) gets the listen-address/firewall hint.
+    monkeypatch.setattr(g, "OLLAMA_URL", "http://192.0.2.1:9")
+    with pytest.raises(g.ModelUnavailableError, match="OLLAMA_HOST=0.0.0.0"):
         g.check_models()
 
 

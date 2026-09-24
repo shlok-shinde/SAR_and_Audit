@@ -56,6 +56,7 @@ from generate_narrative import (  # noqa: E402
     PATTERN_DESCRIPTIONS,
     PRIMARY_MODEL,
     NO_SAR_PATTERN,
+    ModelUnavailableError,
     NarrativeGenerationError,
     conclusion_mismatch,
     draft_warnings,
@@ -831,6 +832,14 @@ def run_pending_generation() -> None:
         )
         try:
             narrative, audit = generate_with_audit(case, case_id=case_id, verbose=False)
+        except ModelUnavailableError as e:
+            # No model was asked: Ollama unreachable, model not pulled, connection lost.
+            st.session_state.pop("pending_generation", None)
+            status.update(label="Could not reach the model", state="error", expanded=True)
+            st.error("Nothing was generated: the model server is not available. "
+                     "Details below.")
+            st.code(str(e), language=None)
+            return
         except NarrativeGenerationError as e:
             # The models answered, but every draft was rejected by validation
             # (refusal, missing FFIEC sections, cut off) — nothing is loaded.

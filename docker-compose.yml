@@ -13,8 +13,10 @@
 #   docker compose down                     # stop services
 #   docker compose down -v                  # stop and remove data volumes
 #
-# The app image carries torch via sentence-transformers and is several GB. Run
+# The app image is about 3 GB (CPU-only torch for sentence-transformers). Run
 # it on the host with `streamlit run src/app.py` if you would rather not build.
+# The container calls Ollama on the host: Ollama must listen on 0.0.0.0 and a
+# host firewall must allow port 11434 from Docker's networks (see README).
 
 services:
   postgres:
@@ -51,7 +53,9 @@ services:
       # Linux has no host.docker.internal by default; this maps it to the host.
       - "host.docker.internal:host-gateway"
     ports:
-      - "8501:8501"
+      # Host port: APP_PORT=8510 docker compose --profile app up -d if 8501 is taken
+      # (e.g. by a `streamlit run` on the host).
+      - "${APP_PORT:-8501}:8501"
     volumes:
       # Built by the pipeline scripts, not baked into the image.
       - ./chroma_db:/app/chroma_db

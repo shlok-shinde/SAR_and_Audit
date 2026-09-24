@@ -133,6 +133,12 @@ Or run it in a container instead, alongside PostgreSQL (Ollama stays on the host
 docker compose --profile app up -d --build
 ```
 
+The image is about 3 GB (CPU-only PyTorch; the container only embeds queries, and the GPU stays with Ollama). It serves on port 8501; if a host `streamlit run` already holds that port, start it with `APP_PORT=8510` in front. The container reaches Ollama on the host, so Ollama must listen on all interfaces (`OLLAMA_HOST=0.0.0.0` in its service environment, not the default 127.0.0.1), and a host firewall such as ufw must allow port 11434 from Docker's networks:
+
+```bash
+sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp
+```
+
 The first draft after starting takes longer (2–3 minutes on the development machine) while Ollama and the embedding model load; later drafts take about 30–40 seconds.
 
 Choose **New case** in the sidebar and upload a transaction file — `tests/fixtures/generic_structuring.csv` is a worked example, with its KYC profile and investigation notes in `generic_structuring_case.json`. Without PostgreSQL the app still drafts and audits; you just cannot save or reload cases.

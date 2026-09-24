@@ -17,8 +17,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependencies first, so code edits don't invalidate the (large) wheel layer.
+# CPU-only torch first: the container only embeds queries (all-MiniLM-L6-v2) and
+# the GPU stays with Ollama on the host, so PyPI's default CUDA build would add
+# several GB of unused libraries. requirements.txt then finds torch installed.
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision \
+    && pip install -r requirements.txt
 
 # Application code and the assets it reads at runtime.
 COPY src/ ./src/

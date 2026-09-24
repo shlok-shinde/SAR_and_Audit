@@ -705,6 +705,11 @@ class NarrativeGenerationError(RuntimeError):
     """Every model/attempt produced unusable output (refusal, wrong format, cut off)."""
 
 
+class ModelUnavailableError(NarrativeGenerationError):
+    """No model could be asked at all: Ollama unreachable, model not pulled, cloud model
+    refused, or the connection dropped. A setup problem, not bad output."""
+
+
 # The draft's *conclusion* that no SAR is warranted. Narrow on purpose: "No SAR has
 # previously been filed" or "further review is not warranted" are not conclusions.
 NO_SAR_PATTERN = re.compile(
@@ -878,18 +883,23 @@ def check_models(models: list[str] | None = None) -> list[str]:
     models = models or [PRIMARY_MODEL, FALLBACK_MODEL]
     remote = [m for m in models if "cloud" in m.lower()]
     if remote:
-        raise NarrativeGenerationError(
+        raise ModelUnavailableError(
             f"{', '.join(remote)} runs on Ollama's cloud, which would send case data off this "
             "machine (RULES.md: local-first). Configure a local model.")
     try:
         with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=3) as reply:
             installed = {m["name"] for m in json.load(reply).get("models", [])}
     except OSError as e:
-        raise NarrativeGenerationError(
-            f"Ollama is not reachable at {OLLAMA_URL} ({e}). Start it with `ollama serve`.") from e
+        hint = "Start it with `ollama serve`."
+        if not re.search(r"//(localhost|127\.0\.0\.1)[:/]", OLLAMA_URL):
+            # Typically the app in a container and Ollama on the host.
+            hint = ("If Ollama runs on the host, it must listen on all interfaces "
+                    "(OLLAMA_HOST=0.0.0.0) and the host firewall must allow port 11434 "
+                    "from the container network.")
+        raise ModelUnavailableError(f"Ollama is not reachable at {OLLAMA_URL} ({e}). {hint}") from e
     available = [m for m in models if m in installed or f"{m}:latest" in installed]
     if not available:
-        raise NarrativeGenerationError(
+        raise ModelUnavailableError(
             f"None of the configured models is installed ({', '.join(models)}). "
             f"Run `ollama pull {models[0]}`.")
     return available
@@ -971,7 +981,7 @@ def generate_with_audit(
                     no_sar=prep["no_sar"])
             except Exception as e:  # noqa: BLE001 — model missing, bad output, etc.
                 if _is_connection_error(e):   # retrying or falling back can't help
-                    raise NarrativeGenerationError(
+                    raise ModelUnavailableError(
                         f"Lost the connection to Ollama at {OLLAMA_URL}: {e}") from e
                 problems = [f"error: {e}"]
 
