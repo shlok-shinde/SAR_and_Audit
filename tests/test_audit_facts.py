@@ -49,7 +49,7 @@ def test_regulatory_threshold_and_case_facts(northgate_case):
     assert any(r.field_name == "Occupation / business" for r in refs)
 
 
-def test_other_currencies_and_long_dates():
+def test_other_currencies_and_long_dates(ibm_samples):
     import case_input as ci
     case = ci.from_attempt(249)
     refs, unverified = check(case, "On September 9, 2022 the account paid 36,052.53 Rupee.")
@@ -66,16 +66,22 @@ def test_unverified_status_takes_precedence(northgate_case):
     assert at.grounding_status(sent) == "unverified"
 
 
-def test_legacy_audit_json_still_loads():
+def test_legacy_audit_json_still_loads(northgate_case):
     """Audit JSON written before Milestone 5 has none of the new keys — it must still load.
 
-    Built by stripping them from a current record, so the test does not depend on
-    audit_logs/ still holding a pre-Milestone-5 file (evaluate_narratives.py rewrites it).
+    Built by stripping them from a record made here, so the test depends neither on
+    audit_logs/ (git-ignored, rewritten by evaluate_narratives.py) nor on the IBM dataset.
     """
     NEW_RECORD_KEYS = ("red_flags", "detection", "case_facts", "generation_config", "case_source")
     NEW_SENTENCE_KEYS = ("rule_attributions", "unverified_values")
 
-    current = at.load_audit_record("006").to_dict()
+    d, flags = ty.analyse_case(northgate_case)
+    text = ("### What (Suspicious Activity)\n\nNG-4471 received $68,150.00 in cash deposits and "
+            "wired $38,000.00 to AE-77120.")
+    current = at.build_audit_record("NG", 249, d.pattern, "m", 0, text, None, {},
+                                    northgate_case.transactions,
+                                    case_facts=northgate_case.case_facts(),
+                                    detection=d.to_dict(), red_flags=flags).to_dict()
     legacy = {k: v for k, v in current.items() if k not in NEW_RECORD_KEYS}
     legacy["narrative_sentences"] = [
         {k: v for k, v in s.items() if k not in NEW_SENTENCE_KEYS}
@@ -115,7 +121,7 @@ def test_count_claims(northgate_case):
     assert not unverified
 
 
-def test_old_draft_count_error_is_caught():
+def test_old_draft_count_error_is_caught(ibm_samples):
     import case_input as ci
     case = ci.from_attempt(285)             # case 003: 16 senders fan in to one account
     _, unverified = check(case, "The account received 16 inbound ACH transfers from 17 "

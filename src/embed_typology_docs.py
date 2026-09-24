@@ -172,6 +172,31 @@ def embed_and_store(
 
 
 # ── 4. Main pipeline ─────────────────────────────────────────────────────────
+def check_sources(pdf_files: list[Path]) -> None:
+    """Stop if the PDFs are missing; name any that are missing or misnamed.
+
+    The PDFs aren't in the repository, and a knowledge base built from the
+    mapping alone (9 chunks instead of 843) still "works", so without this the
+    app would run with near-empty retrieval and nothing would say so.
+    """
+    listed = re.findall(r"`([^`]+\.pdf)`", (SOURCES_DIR / "SOURCES.md").read_text(encoding="utf-8"))
+    found = {p.name for p in pdf_files}
+    if not found:
+        raise SystemExit("No PDFs in sources/. Download the documents listed in "
+                         "sources/SOURCES.md (under the exact filenames given there), "
+                         "then run this again.")
+    missing = [name for name in listed if name not in found]
+    extra = sorted(found - set(listed))
+    if missing:
+        print(f"  WARNING: {len(missing)} of the {len(listed)} documents in sources/SOURCES.md "
+              f"are missing; retrieval will be weaker without them:")
+        for name in missing:
+            print(f"    - {name}")
+    if extra:
+        print("  Note: these PDFs aren't listed in sources/SOURCES.md (check the filename): "
+              + ", ".join(extra))
+
+
 def run_pipeline() -> None:
     """Full extraction → chunking → embedding pipeline."""
 
@@ -179,6 +204,7 @@ def run_pipeline() -> None:
     all_pages = []
     pdf_files = sorted(SOURCES_DIR.glob("*.pdf"))
     print(f"Found {len(pdf_files)} PDF files in sources/")
+    check_sources(pdf_files)
 
     for pdf_path in pdf_files:
         pages = extract_pdf_text(pdf_path)

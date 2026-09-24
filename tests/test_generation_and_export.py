@@ -42,6 +42,9 @@ def test_case_file_and_prompt_blocks(northgate_case):
     txt = gn.format_transaction_data(northgate_case, d.pattern, d)
     assert "SUBJECT" in txt and "OTHER ACCOUNT ACTIVITY" in txt
     assert "rule-based detection" in txt
+
+
+def test_sample_case_has_no_case_file(ibm_samples):
     sample = ci.from_attempt(249)
     assert gn.format_case_file(sample, None, []) == ""                 # nothing analyst-provided
     assert "LAUNDERING ATTEMPT #249" in gn.format_transaction_data(sample, "CYCLE")

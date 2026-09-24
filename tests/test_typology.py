@@ -70,7 +70,7 @@ def test_new_account_flag(northgate_case):
     assert "NEW_ACCOUNT" in {f.code for f in flags}
 
 
-def test_negative_controls_warrant_no_sar():
+def test_negative_controls_warrant_no_sar(ibm_samples):
     for attempt in (329, 179):          # IBM RANDOM attempts (cases 015, 016)
         case = ci.from_attempt(attempt)
         d, flags = ty.analyse_case(case)

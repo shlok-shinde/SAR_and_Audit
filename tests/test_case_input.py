@@ -9,16 +9,20 @@ def _load(name, **kw):
     return ci.import_table(raw, **kw)
 
 
-def test_ibm_trans_format_is_detected_and_enriched():
+def test_ibm_trans_format_is_detected():
     canon, issues, fmt, _ = _load("ibm_cycle_249.csv")
     assert fmt == "ibm_trans"
     assert len(canon) == 124
     assert canon["Flagged"].sum() == 6          # "Is Laundering" used as the alert flag
     assert set(ci.CANONICAL_COLUMNS) <= set(canon.columns)
+    assert any("Is Laundering" in i["message"] for i in issues)
+
+
+def test_ibm_trans_bank_names_are_enriched(ibm_accounts):
+    canon, _, _, _ = _load("ibm_cycle_249.csv")
     # Bank / entity names come from HI-Small_accounts.csv
     row = canon[canon["From_Account"] == "8049DD1C0"].iloc[0]
     assert row["From_Bank_Name"] == "China Bank #14"
-    assert any("Is Laundering" in i["message"] for i in issues)
 
 
 def test_generic_export_mapping_dates_and_bank_names():
@@ -92,7 +96,7 @@ def test_case_facts_and_views(northgate_case):
     assert len(northgate_case.flagged()) == 9 and len(northgate_case.context()) == 12
 
 
-def test_from_attempt_sample():
+def test_from_attempt_sample(ibm_samples):
     case = ci.from_attempt(249, "006")
     assert case.dataset_label == "CYCLE" and case.attempt_id == 249
     assert "pattern_type" not in case.transactions.columns

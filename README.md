@@ -88,7 +88,7 @@ flowchart LR
 | Retrieval | 14/16 label queries, 12/16 description queries — hybrid retrieval covers the gap |
 | Fact-check | Unverified figures in the 13 evaluation drafts fell from 30 to 3 after the edge-case fixes (same checker on both). The 3 left are real model errors, e.g. an invented "Bitcoin-linked transaction" |
 | Edge cases | 20 defects found by an adversarial end-to-end pass and fixed, each with a regression test |
-| Tests | 146 pytest tests |
+| Tests | 148 pytest tests |
 | Generation | 29–37s per narrative on a local 5B model |
 
 Caveats: the typology rules were designed against the same IBM data they are scored on, so 98.1% is an upper bound; "sourced" means a sentence cites real values, not that it is true; and claims with no figure or relationship in them ("controlled by a trafficking organization") can't be checked by rules.
@@ -100,14 +100,16 @@ Caveats: the typology rules were designed against the same IBM data they are sco
 **Prerequisites:** Python 3.11+ (developed on 3.14), [Ollama](https://ollama.com), and Docker for PostgreSQL.
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
+
+The install is about 7 GB, mostly PyTorch (pulled in by sentence-transformers), and takes a few minutes.
 
 ```bash
 ollama pull gemma4:e2b && ollama pull qwen3.5:4b
 ```
 
-Download the seven regulatory PDFs listed in [sources/SOURCES.md](sources/SOURCES.md) into `sources/` — they are third-party publications, so the repository links to the publishers rather than redistributing them. Then build the knowledge base (~843 chunks into `chroma_db/`):
+Download the seven regulatory PDFs listed in [sources/SOURCES.md](sources/SOURCES.md) into `sources/`, under the exact filenames given there. They are third-party publications, so the repository links to the publishers rather than redistributing them. Then build the knowledge base (843 chunks into `chroma_db/`). The script stops if it finds no PDFs and names any that are missing. Its first run downloads the embedding model (all-MiniLM-L6-v2, about 90 MB) from Hugging Face; after that nothing needs the network except Ollama pulls:
 
 ```bash
 .venv/bin/python src/embed_typology_docs.py
@@ -130,6 +132,8 @@ Or run it in a container instead, alongside PostgreSQL (Ollama stays on the host
 ```bash
 docker compose --profile app up -d --build
 ```
+
+The first draft after starting takes longer (2–3 minutes on the development machine) while Ollama and the embedding model load; later drafts take about 30–40 seconds.
 
 Choose **New case** in the sidebar and upload a transaction file — `tests/fixtures/generic_structuring.csv` is a worked example, with its KYC profile and investigation notes in `generic_structuring_case.json`. Without PostgreSQL the app still drafts and audits; you just cannot save or reload cases.
 
@@ -167,13 +171,15 @@ Rebuilds the audit trails for the drafts already in `generated/` and loads them 
 .venv/bin/python -m pytest
 ```
 
+Without the optional IBM dataset, the 6 tests that use it are skipped, not failed (`-rs` prints why). None of the tests need Ollama, ChromaDB or PostgreSQL.
+
 ---
 
 ## Repository layout
 
 ```
 src/          pipeline and app (see the module table above)
-tests/        146 pytest tests (incl. one regression guard per edge-case defect), fixtures for every upload format
+tests/        148 pytest tests (incl. one regression guard per edge-case defect), fixtures for every upload format
 narratives/   16 hand-written gold-standard SAR narratives (the benchmark)
 generated/    model drafts for the 13 evaluation cases
 assets/       the demo video (MP4) and its README preview (GIF)
