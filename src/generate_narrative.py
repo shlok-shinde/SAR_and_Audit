@@ -762,6 +762,21 @@ def validate_narrative(text: str, done_reason: str | None = None,
     return problems
 
 
+def conclusion_mismatch(text: str, decision_no_sar: bool) -> str:
+    """The draft's conclusion disagrees with the analyst's SAR / No SAR decision ('' if not).
+
+    Generation checks the conclusion against the rules (validate_narrative); this checks
+    the reviewer-edited text against the reviewer's own decision.
+    """
+    concludes_no_sar = bool(NO_SAR_PATTERN.search(text))
+    if decision_no_sar and not concludes_no_sar:
+        return ("the decision is No SAR, but the narrative never states that the activity "
+                "does not warrant a SAR")
+    if not decision_no_sar and concludes_no_sar:
+        return "the narrative concludes that no SAR is warranted, but the decision is File SAR"
+    return ""
+
+
 def draft_warnings(text: str, prior_sars=()) -> list[str]:
     """Shortcomings worth one retry, but not worth discarding an otherwise valid draft."""
     warnings = []

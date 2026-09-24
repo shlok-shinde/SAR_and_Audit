@@ -1273,6 +1273,8 @@ def build_audit_record(
             sent.sentence_text, txn_df, case_facts, index)
         if not sent.unverified_values:
             sent.needs_review = needs_review(sent.sentence_text, sent.field_references)
+        sent.needs_review = sent.needs_review or typology_mismatch(sent.sentence_text,
+                                                                   pattern_type)
 
     # Analysis: retrieved regulatory context and rule-based red flags
     if retrieval_metadata and retrieval_metadata.chunks_returned:
@@ -1418,6 +1420,107 @@ def diff_provenance(
         else:
             changes[sent.sentence_index] = {"kind": "added"}
     return changes, removed
+
+
+# ── Consistency Across Sentences ─────────────────────────────────────────────
+
+# Typology names as a narrative writes them. "cycle" skips everyday uses
+# ("billing cycle"); a typology's own phases may be named ("GATHER-SCATTER
+# (13-degree Fan-In)").
+TYPOLOGY_NAMES = {
+    "FAN-OUT": re.compile(r"\bfan[- ]?outs?\b", re.IGNORECASE),
+    "FAN-IN": re.compile(r"\bfan[- ]?ins?\b", re.IGNORECASE),
+    "CYCLE": re.compile(r"(?<!billing )(?<!business )(?<!life )(?<!payroll )(?<!settlement )"
+                        r"(?<!reporting )(?<!review )(?<!statement )"
+                        r"\bcycl(?:e|es|ic|ical)\b|\bcircular\b|\bround[- ]trip\w*", re.IGNORECASE),
+    "GATHER-SCATTER": re.compile(r"\bgather[- ]scatter\b", re.IGNORECASE),
+    "SCATTER-GATHER": re.compile(r"\bscatter[- ]gather\b", re.IGNORECASE),
+    "STACK": re.compile(r"\bstack(?:s|ed|ing)?\b", re.IGNORECASE),
+    "BIPARTITE": re.compile(r"\bbipartite\b", re.IGNORECASE),
+}
+TYPOLOGY_PHASES = {"GATHER-SCATTER": {"FAN-IN", "FAN-OUT"},
+                   "SCATTER-GATHER": {"FAN-OUT", "FAN-IN"}}
+# "ruling out CYCLE", "no fan-in", "rather than a stack": the name is excluded, not claimed.
+_RULED_OUT_BEFORE = re.compile(
+    r"\b(?:not|no|never|neither|nor|without|rather than|instead of|unlike|"
+    r"rul(?:e|es|ed|ing) out|exclud\w+|inconsistent with|absence of)\b", re.IGNORECASE)
+_RULED_OUT_AFTER = re.compile(
+    r"^[^.;]{0,40}?\b(?:(?:was|were|is|are|been) (?:ruled out|excluded|not (?:present|observed|"
+    r"detected|indicated))|does not apply)", re.IGNORECASE)
+
+
+def typology_mismatch(sentence: str, pattern: str | None) -> str:
+    """Why a sentence naming a different typology from the case's needs review ('' if none).
+
+    Catches an edit (or a model slip) that calls a FAN-IN case "consistent with
+    the Gather-Scatter typology" while the rest of the draft describes a fan-in.
+    """
+    case = (pattern or "").upper()
+    if not case:
+        return ""
+    allowed = {case} | TYPOLOGY_PHASES.get(case, set())
+    for name, rx in TYPOLOGY_NAMES.items():
+        if name in allowed:
+            continue
+        for m in rx.finditer(sentence):
+            if (_RULED_OUT_BEFORE.search(sentence[:m.start()])
+                    or _RULED_OUT_AFTER.match(sentence[m.end():])):
+                continue
+            if case in ("NONE", "RANDOM"):
+                return (f"Names a {name} pattern, but no typology was detected in this case "
+                        "— check it")
+            return f"Names a {name} pattern, but this case is {case} — check it"
+    return ""
+
+
+def _value_keys(text: str, years: set[int]) -> dict[tuple, str]:
+    """Amounts, dates and identifiers in `text`, normalised → how they were written."""
+    keys: dict[tuple, str] = {}
+    for m in _amount_mentions(text):
+        keys.setdefault(("amount", round(m.value, 2)), text[m.span[0]:m.span[1]].strip())
+    for dates, raw in _date_mentions(text, years):
+        for d in dates:
+            keys.setdefault(("date", d), raw)
+    for token in _TOKEN.findall(text):
+        digits = sum(ch.isdigit() for ch in token)
+        if (digits >= 3 and any(ch.isalpha() for ch in token)) or (token.isdigit() and len(token) >= 6):
+            keys.setdefault(("id", token.upper()), token)
+    return keys
+
+
+def stale_mentions(current: list[SentenceProvenance], changes: dict[int, dict]
+                   ) -> dict[int, list[str]]:
+    """Other sentences that still state a value the reviewer changed in an edit.
+
+    When an edit replaces "$68,150.00" with "$88,150.00", any other sentence
+    that still says "$68,150.00" is listed, so the reviewer can decide whether
+    it needs the same change. It is a pointer, never an automatic rewrite: the
+    same number can mean different things in different sentences.
+
+    Returns sentence_index → notes. Only amounts, dates and identifiers are
+    compared (small bare counts are too ambiguous to match across sentences).
+    """
+    text = " ".join(s.sentence_text for s in current)
+    years = {int(y) for y in re.findall(r"\b(?:19|20)\d\d\b", text)}
+    keys = {s.sentence_index: _value_keys(s.sentence_text, years) for s in current}
+    by_index = {s.sentence_index: s for s in current}
+    notes: dict[int, list[str]] = {}
+    for i, change in sorted(changes.items()):
+        if change.get("kind") != "edited" or i not in by_index:
+            continue
+        old, new = _value_keys(change["was"], years), keys[i]
+        removed = {k: raw for k, raw in old.items() if k not in new}
+        added = [k for k in new if k not in old]
+        where = by_index[i].section or "the narrative"
+        for key, old_raw in removed.items():
+            same_kind = [k for k in added if k[0] == key[0]]
+            to = f" to {new[same_kind[0]]}" if len(same_kind) == 1 else ""
+            for j, other in keys.items():
+                if j != i and key in other:
+                    notes.setdefault(j, []).append(
+                        f"Still says {other[key]}, which you changed{to} in S{i} ({where}) "
+                        "— update it if it refers to the same thing")
+    return notes
 
 
 # ── Provenance Report ────────────────────────────────────────────────────────

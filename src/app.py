@@ -39,7 +39,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
-from audit_trail import AuditRecord, grounding_status, rebuild_audit_record  # noqa: E402
+from audit_trail import (  # noqa: E402
+    AuditRecord, grounding_status, rebuild_audit_record, stale_mentions, typology_mismatch,
+)
 from case_input import CaseInput, from_attempt  # noqa: E402
 from data_loader import get_pattern_attempts  # noqa: E402
 from evaluate_narratives import ALL_SECTIONS, REQUIRED_SECTIONS  # noqa: E402
@@ -47,13 +49,15 @@ from export import (  # noqa: E402
     continuing_due, events_to_dicts, export_bundle, filing_due, narrative_length,
 )
 from intake import render_funds_flow, render_intake, render_red_flags, seed_intake  # noqa: E402
-from review_components import audit_pane, draft_pane  # noqa: E402
+from review_components import audit_pane, draft_pane, reviewer_changes  # noqa: E402
 from generate_narrative import (  # noqa: E402
     CASE_TO_ATTEMPT,
     FALLBACK_MODEL,
     PATTERN_DESCRIPTIONS,
     PRIMARY_MODEL,
+    NO_SAR_PATTERN,
     NarrativeGenerationError,
+    conclusion_mismatch,
     draft_warnings,
     generate_with_audit,
     retrieve_by_queries,
@@ -669,7 +673,7 @@ def grounding_counts(audit: AuditRecord) -> dict:
 CASE_KEYS = ("case_id", "case_input", "attempt_id", "pattern", "narrative", "audit", "model",
              "status", "last_saved", "narrative_editor", "baseline_narrative", "baseline_audit",
              "drafted_by", "approved_by", "decision_choice", "decision_rationale",
-             "reviewer_notes", "ack_unverified")
+             "reviewer_notes", "ack_unverified", "ack_conclusion", "audit_for")
 
 
 def _why_section(narrative: str) -> str:
@@ -690,7 +694,7 @@ def load_case_into_state(case_id: str, case: CaseInput, narrative: str,
         case_id=case_id, case_input=case,
         attempt_id=case.attempt_id if case else (audit.attempt_id if audit else None),
         pattern=(audit.pattern_type if audit else "") or (case.dataset_label if case else ""),
-        narrative=narrative, audit=audit, model=model,
+        narrative=narrative, audit=audit, audit_for=narrative, model=model,
         status=status, last_saved="" if status == "Draft" else narrative,
         narrative_editor=narrative,
         # Baseline = the text/audit as generated or loaded. Edits are diffed
@@ -701,6 +705,7 @@ def load_case_into_state(case_id: str, case: CaseInput, narrative: str,
         decision_rationale=decision_rationale or (_why_section(narrative) if no_sar else ""),
         reviewer_notes=reviewer_notes or "",
         ack_unverified=False,
+        ack_conclusion=False,
         screen="review",
     )
 
@@ -747,6 +752,34 @@ def refresh_audit() -> None:
         st.session_state["audit"] = baseline
     else:
         st.session_state["audit"] = rebuild_audit_for_edited_text(baseline, narrative)
+    st.session_state["audit_for"] = narrative
+
+
+def decided_no_sar() -> bool:
+    return st.session_state.get("decision_choice") == "No SAR"
+
+
+def consistency_notes(audit: AuditRecord | None, baseline: AuditRecord | None
+                      ) -> dict[int, list[str]]:
+    """Per-sentence pointers to problems that span sentences, recomputed on every rerun.
+
+    Each sentence is fact-checked against the case data on its own, so an edit can
+    leave the draft disagreeing with itself or with the decision. These notes point
+    the reviewer at the other sentences to check; nothing is rewritten for them.
+    """
+    if audit is None:
+        return {}
+    changes, _ = reviewer_changes(audit, baseline)
+    notes = stale_mentions(audit.narrative_sentences, changes)
+    for sent in audit.narrative_sentences:
+        if not decided_no_sar() and NO_SAR_PATTERN.search(sent.sentence_text):
+            notes.setdefault(sent.sentence_index, []).append(
+                "Concludes that no SAR is warranted, but the decision is File SAR")
+        # Records audited before the typology check carry no needs_review for it.
+        mismatch = typology_mismatch(sent.sentence_text, audit.pattern_type)
+        if mismatch and mismatch != sent.needs_review:
+            notes.setdefault(sent.sentence_index, []).append(mismatch)
+    return notes
 
 
 def user_name() -> str:
@@ -993,7 +1026,7 @@ def open_editor() -> None:
         st.session_state["narrative_editor"] = st.session_state["narrative"]
 
 
-def render_draft_pane() -> None:
+def render_draft_pane(notes: dict[int, list[str]]) -> None:
     with st.container(horizontal=True, vertical_alignment="center", key="pane-head-draft"):
         st.subheader("Draft narrative", icon=":material/description:")
         st.space("stretch")
@@ -1015,7 +1048,7 @@ def render_draft_pane() -> None:
             st.session_state["narrative"], st.session_state.get("audit"),
             st.session_state.get("baseline_audit"),
             editing=view == "Edit", key="draft_doc",
-            on_change=sync_rich_editor, height=PANE_HEIGHT,
+            on_change=sync_rich_editor, height=PANE_HEIGHT, notes=notes,
         )
 
 
@@ -1186,6 +1219,12 @@ def render_decision(db_ok: bool, narrative: str, audit: AuditRecord | None) -> N
     if counts["unverified_values"]:
         ack = st.checkbox(f"I checked the {counts['unverified_values']} figure(s) the audit could "
                           "not find in the case data", key="ack_unverified")
+    # The wording check is a regex, so a reviewer can confirm a false alarm
+    # (e.g. "the prior review found it did not warrant a SAR") instead of rewording.
+    if conflict := conclusion_mismatch(narrative, choice == "No SAR"):
+        st.caption(f":material/warning: {conflict[0].upper()}{conflict[1:]}.")
+        ack = st.checkbox("I checked that the narrative's conclusion matches this decision",
+                          key="ack_conclusion") and ack
     maker, me = st.session_state.get("drafted_by", ""), user_name()
     same_person = bool(maker and me and maker.lower() == me.lower())
     missing_rationale = choice == "No SAR" and not st.session_state.get("decision_rationale", "").strip()
@@ -1335,24 +1374,43 @@ def _kv(rows: list[tuple[str, str]]) -> str:
         f"<dt>{html.escape(k)}</dt><dd>{html.escape(str(v))}</dd>" for k, v in rows) + "</dl>"
 
 
-def render_draft_warnings(narrative: str) -> None:
-    """Shortcomings in the current text: missing sections, no alternative
-    explanation, prior SAR not cited. Re-checked on every edit, so the banner
-    clears only when the text is actually fixed."""
+def draft_issues(narrative: str, audit: AuditRecord | None,
+                 notes: dict[int, list[str]]) -> list[str]:
+    """Everything wrong with the current text as a whole, re-checked on every edit:
+    missing sections, no alternative explanation, prior SAR not cited, a conclusion
+    that contradicts the decision, a different typology named, stale values."""
     case = st.session_state.get("case_input")
     # Generation rejects drafts missing a required section; an edit can still delete one.
     sections = score_text(narrative)["sections"]
     missing = [s for s in REQUIRED_SECTIONS if not sections[s]]
-    warnings = ([f"missing required sections: {', '.join(missing)}"] if missing else []) \
+    issues = ([f"missing required sections: {', '.join(missing)}"] if missing else []) \
         + draft_warnings(narrative, case.prior_sars if case else ())
-    if not warnings:
+    if conflict := conclusion_mismatch(narrative, decided_no_sar()):
+        issues.append(conflict)
+    if audit:
+        other = [f"S{s.sentence_index}" for s in audit.narrative_sentences
+                 if typology_mismatch(s.sentence_text, audit.pattern_type)]
+        if other:
+            issues.append(f"{', '.join(other)} name{'s' if len(other) == 1 else ''} a different "
+                          f"typology from this case's ({audit.pattern_type})")
+    stale = [f"S{i}" for i, ns in sorted(notes.items()) if any(n.startswith("Still says") for n in ns)]
+    if stale:
+        issues.append(f"{', '.join(stale)} still state{'s' if len(stale) == 1 else ''} a value "
+                      "you changed in another sentence")
+    return issues
+
+
+def render_draft_warnings(narrative: str, audit: AuditRecord | None,
+                          notes: dict[int, list[str]]) -> None:
+    """The banner clears only when the text is actually fixed."""
+    issues = draft_issues(narrative, audit, notes)
+    if not issues:
         return
-    if narrative == st.session_state.get("baseline_narrative"):
-        st.warning("The draft was kept despite: " + "; ".join(warnings)
-                   + ". Fix these while editing.", icon=":material/rule:")
-    else:
-        st.warning("The edited draft still has: " + "; ".join(warnings) + ".",
-                   icon=":material/rule:")
+    edited = narrative != st.session_state.get("baseline_narrative")
+    st.warning(("**The edited draft still needs fixing:**" if edited
+                else "**This draft needs fixing before approval:**")
+               + "".join(f"\n- {i[0].upper()}{i[1:]}" for i in issues),
+               icon=":material/rule:")
 
 
 def render_case_evidence() -> None:
@@ -1450,21 +1508,27 @@ def main() -> None:
         render_empty_state()
         return
 
+    # A rerun can interrupt the edit callback after the text is stored but before
+    # its audit is (the first rebuild loads the embedding model), so re-sync here.
+    if st.session_state.get("audit_for") != st.session_state["narrative"]:
+        refresh_audit()
     render_case_header(db_ok)
     st.space("small")
     render_metrics(st.session_state["narrative"], st.session_state.get("audit"))
-    render_draft_warnings(st.session_state["narrative"])
+    notes = consistency_notes(st.session_state.get("audit"), st.session_state.get("baseline_audit"))
+    render_draft_warnings(st.session_state["narrative"], st.session_state.get("audit"), notes)
     render_case_evidence()
     st.space("small")
 
     left, right = st.columns(2)
     with left:
-        render_draft_pane()
+        render_draft_pane(notes)
     with right:
         with st.container(horizontal=True, vertical_alignment="center", key="pane-head-audit"):
             st.subheader("Audit trail", icon=":material/fact_check:")
         audit_pane(st.session_state.get("audit"), st.session_state.get("baseline_audit"),
-                   st.session_state["narrative"], key="audit_doc", height=PANE_HEIGHT)
+                   st.session_state["narrative"], key="audit_doc", height=PANE_HEIGHT,
+                   notes=notes)
 
 
 if __name__ == "__main__":

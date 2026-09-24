@@ -50,7 +50,7 @@ def reviewer_changes(audit: AuditRecord | None,
 
 
 def _link_sentences(line: str, sentences: list, used: set[int],
-                    changes: dict[int, dict]) -> list[dict]:
+                    changes: dict[int, dict], notes: dict[int, list[str]]) -> list[dict]:
     """Split one Markdown line into segments, tagging audited sentences by index.
 
     Audit sentences are verbatim slices of narrative lines (see
@@ -74,7 +74,8 @@ def _link_sentences(line: str, sentences: list, used: set[int],
             segments.append({"md": line[cursor:start]})
         segments.append({"md": line[start:end], "s": sent.sentence_index,
                          "g": grounding_status(sent),
-                         "c": changes.get(sent.sentence_index, {}).get("kind", "")})
+                         "c": changes.get(sent.sentence_index, {}).get("kind", ""),
+                         "n": "; ".join(notes.get(sent.sentence_index, []))})
         used.add(sent.sentence_index)
         cursor = end
     if cursor < len(line):
@@ -83,10 +84,16 @@ def _link_sentences(line: str, sentences: list, used: set[int],
 
 
 def narrative_blocks(markdown: str, audit: AuditRecord | None,
-                     changes: dict[int, dict] | None = None) -> list[dict]:
-    """Parse narrative Markdown into render blocks with sentence links."""
+                     changes: dict[int, dict] | None = None,
+                     notes: dict[int, list[str]] | None = None) -> list[dict]:
+    """Parse narrative Markdown into render blocks with sentence links.
+
+    `notes` are consistency pointers per sentence (a value changed elsewhere, a
+    conclusion that contradicts the decision); the draft marks those sentences.
+    """
     sentences = list(audit.narrative_sentences) if audit else []
     changes = changes or {}
+    notes = notes or {}
     used: set[int] = set()
     blocks: list[dict] = []
     para: list[dict] = []   # lines of the paragraph being collected
@@ -119,11 +126,11 @@ def narrative_blocks(markdown: str, audit: AuditRecord | None,
             while pos < len(lines) and is_table_row(lines[pos].strip()):
                 row = lines[pos].strip()
                 pos += 1
-                linked = _link_sentences(row, sentences, used, changes)
+                linked = _link_sentences(row, sentences, used, changes, notes)
                 sent = next((g for g in linked if "s" in g and g["md"] == row), None)
                 table["rows"].append({
                     "cells": table_cells(row),
-                    **({"s": sent["s"], "g": sent["g"], "c": sent["c"]} if sent else {}),
+                    **({"s": sent["s"], "g": sent["g"], "c": sent["c"], "n": sent["n"]} if sent else {}),
                 })
             blocks.append(table)
             continue
@@ -135,7 +142,7 @@ def narrative_blocks(markdown: str, audit: AuditRecord | None,
             flush()
             level = min(len(m.group(1)), 3)
             blocks.append({"type": f"h{level}",
-                           "segments": _link_sentences(m.group(2), sentences, used, changes)})
+                           "segments": _link_sentences(m.group(2), sentences, used, changes, notes)})
             continue
         list_match = _BULLET.match(line) or _NUMBERED.match(line)
         if list_match:
@@ -143,14 +150,14 @@ def narrative_blocks(markdown: str, audit: AuditRecord | None,
             if para or (listing and listing["type"] != kind):
                 flush()
             listing = listing or {"type": kind, "items": []}
-            listing["items"].append(_link_sentences(list_match.group(1), sentences, used, changes))
+            listing["items"].append(_link_sentences(list_match.group(1), sentences, used, changes, notes))
             continue
         if listing:
             flush()
         # Every source line keeps its own line: generated narratives put one
         # labelled fact per line ("**Account Numbers:** …"), which strict
         # Markdown would run together into a single paragraph.
-        para.append({"segments": _link_sentences(line, sentences, used, changes), "br": True})
+        para.append({"segments": _link_sentences(line, sentences, used, changes, notes), "br": True})
     flush()
     return blocks
 
@@ -183,10 +190,11 @@ def _row_cells(text: str, headers: dict[str, list[str]]) -> list[dict]:
 
 
 def audit_payload(audit: AuditRecord | None, baseline: AuditRecord | None = None,
-                  markdown: str = "") -> dict:
+                  markdown: str = "", notes: dict[int, list[str]] | None = None) -> dict:
     """Serialize the audit record into what the audit pane renders."""
     if audit is None:
         return {"empty": True}
+    notes = notes or {}
     changes, removed = reviewer_changes(audit, baseline)
     headers = table_headers(markdown)
     sections: list[dict] = []
@@ -209,6 +217,7 @@ def audit_payload(audit: AuditRecord | None, baseline: AuditRecord | None = None
             "unverified": [{"f": u.field_name, "v": str(u.field_value), "n": u.note}
                            for u in getattr(sent, "unverified_values", [])],
             "review": getattr(sent, "needs_review", ""),
+            "notes": notes.get(sent.sentence_index, []),
             "typology": sent.typology_match or "",
             "confidence": sent.confidence_note,
             "change": changes.get(sent.sentence_index, {}).get("kind", ""),
@@ -386,21 +395,28 @@ _DRAFT_CSS = _SHARED_CSS + """
 .hl-on .s.grounded   { box-shadow: inset 0 -2px 0 rgb(107 196 149 / .55); }
 .hl-on .s.partial    { box-shadow: inset 0 -2px 0 rgb(217 174 91 / .6); }
 .hl-on .s.ungrounded { background: rgb(226 130 111 / .10); box-shadow: inset 0 -2px 0 rgb(226 130 111 / .7); }
-/* Figures not in the case data: always visible, like a spell-check squiggle */
-.s.unverified { text-decoration: underline wavy rgb(226 130 111 / .9); text-decoration-thickness: 1px;
-  text-underline-offset: 3px; }
-.hl-on .s.unverified { background: rgb(226 130 111 / .12); }
 /* Reviewer changes, like tracked changes */
 .s.edited, .s.added { text-decoration: underline dotted rgb(143 179 232 / .8);
   text-decoration-thickness: 1.5px; text-underline-offset: 4px; }
+/* Inconsistent with another sentence or with the decision: check it */
+.s.note { text-decoration: underline wavy rgb(217 174 91 / .95); text-decoration-thickness: 1px;
+  text-underline-offset: 3px; }
+/* Figures not in the case data: always visible, like a spell-check squiggle.
+   Declared last so it wins over the edit and consistency marks. */
+.s.unverified { text-decoration: underline wavy rgb(226 130 111 / .9); text-decoration-thickness: 1px;
+  text-underline-offset: 3px; }
+.hl-on .s.unverified { background: rgb(226 130 111 / .12); }
 .wrap.editing .s { cursor: text; background: none !important; box-shadow: none !important; }
 """
 
 _DRAFT_JS = _INLINE_JS + _SCROLL_JS + r"""
 // Document model -> HTML (blocks come from narrative_blocks in Python).
+const attr = (s) => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+const segTitle = (g) => g.n ? ` title="${attr(g.n)}"`
+  : g.c ? ` title="${g.c === "added" ? "Added" : "Edited"} by reviewer"` : "";
 const segHtml = (segs) => segs.map((g) => g.s === undefined
   ? inlineMd(g.md)
-  : `<span class="s ${g.g} ${g.c}" data-s="${g.s}"${g.c ? ` title="${g.c === "added" ? "Added" : "Edited"} by reviewer"` : ""}>${inlineMd(g.md)}</span>`).join("");
+  : `<span class="s ${g.g} ${g.c}${g.n ? " note" : ""}" data-s="${g.s}"${segTitle(g)}>${inlineMd(g.md)}</span>`).join("");
 
 function renderBlocks(blocks) {
   return blocks.map((b) => {
@@ -409,7 +425,7 @@ function renderBlocks(blocks) {
       segHtml(l.segments) + (i < b.lines.length - 1 ? (l.br ? "<br>" : " ") : "")).join("") + "</p>";
     if (b.type === "table") return `<div class="tw"><table><thead><tr>` +
       b.head.map((h) => `<th>${inlineMd(h)}</th>`).join("") + `</tr></thead><tbody>` +
-      b.rows.map((r) => `<tr${r.s === undefined ? "" : ` class="s ${r.g} ${r.c || ""}" data-s="${r.s}"`}>` +
+      b.rows.map((r) => `<tr${r.s === undefined ? "" : ` class="s ${r.g} ${r.c || ""}${r.n ? " note" : ""}" data-s="${r.s}"${segTitle(r)}`}>` +
         r.cells.map((c) => `<td>${inlineMd(c)}</td>`).join("") + `</tr>`).join("") +
       `</tbody></table></div>`;
     if (b.type === "ul" || b.type === "ol")
@@ -683,6 +699,8 @@ details.ctx summary .n { margin-left: auto; color: var(--text-3); font-size: 12p
 .card.unverified { border-color: rgb(226 130 111 / .45); }
 .miss { color: #E9A596; }
 .miss small { display: block; color: var(--text-3); font-size: 11.5px; }
+.note { color: var(--warn); }
+.note + .note, .miss + .note { margin-top: 3px; }
 .meter .alarm { background: repeating-linear-gradient(135deg, var(--bad) 0 3px, transparent 3px 6px); }
 .flag { border-top: 1px solid var(--line); padding: 8px 0 2px; font-size: 12px; }
 .flag-h { display: flex; gap: 8px; align-items: center; color: var(--text); font-weight: 500; }
@@ -783,7 +801,9 @@ function render(d) {
         `<div class="kv"><code>${esc(r.f)}</code><span>${esc(r.v)}</span></div>`).join("")}</dd>`);
       if (it.unverified.length) ev.unshift(`<dt class="miss">Check</dt><dd>${it.unverified.map((u) =>
         `<div class="miss">${esc(u.v)} ${u.n.startsWith("written with") ? "has the wrong currency sign" : (MISS[u.f] || "is not in the case data")}${u.n ? `<small>${esc(u.n)}</small>` : ""}</div>`).join("")}</dd>`);
-      if (it.review) ev.unshift(`<dt class="miss">Review</dt><dd><div class="miss">${esc(it.review)}</div></dd>`);
+      if (it.review || it.notes.length) ev.unshift(`<dt class="miss">Review</dt><dd>` +
+        (it.review ? `<div class="miss">${esc(it.review)}</div>` : "") +
+        it.notes.map((n) => `<div class="note">${esc(n)}</div>`).join("") + `</dd>`);
       if (it.context.length) ev.push(`<dt>Source</dt><dd>${it.context.map((x) => `<span class="chip">${esc(x)}</span>`).join(" ")}</dd>`);
       if (it.rules.length) ev.push(`<dt>Rules</dt><dd>${it.rules.map((x) => esc(x)).join(" · ")}</dd>`);
       if (it.typology) ev.push(`<dt>Typology</dt><dd>${esc(it.typology)}</dd>`);
@@ -862,14 +882,15 @@ def _rev(*parts: object) -> str:
 
 def draft_pane(markdown: str, audit: AuditRecord | None,
                baseline: AuditRecord | None, *, editing: bool,
-               key: str, on_change, height: int) -> None:
+               key: str, on_change, height: int,
+               notes: dict[int, list[str]] | None = None) -> None:
     """Render the formatted draft; in edit mode it is a rich-text editor.
 
     ``on_change`` fires after the reviewer leaves the editor with changes; the
     new Markdown is then at ``st.session_state[key]["markdown"]``.
     """
     changes, _ = reviewer_changes(audit, baseline)
-    blocks = narrative_blocks(markdown, audit, changes)
+    blocks = narrative_blocks(markdown, audit, changes, notes)
     _draft_component(
         key=key,
         data={"mode": "edit" if editing else "preview", "blocks": blocks,
@@ -880,8 +901,9 @@ def draft_pane(markdown: str, audit: AuditRecord | None,
 
 
 def audit_pane(audit: AuditRecord | None, baseline: AuditRecord | None,
-               markdown: str, *, key: str, height: int) -> None:
-    payload = audit_payload(audit, baseline, markdown)
+               markdown: str, *, key: str, height: int,
+               notes: dict[int, list[str]] | None = None) -> None:
+    payload = audit_payload(audit, baseline, markdown, notes)
     _audit_component(
         key=key, data={"audit": payload, "rev": _rev(payload)}, height=height,
     )
